@@ -1,6 +1,6 @@
 workflows:
-  ios-release-zip:
-    name: Cinematy iOS Release ZIP
+  cinematy-ios-release-unsigned:
+    name: Cinematy iOS Release Unsigned ZIP
     max_build_duration: 60
     instance_type: mac_mini_m2
 
@@ -12,80 +12,308 @@ workflows:
     scripts:
       - name: Prepare Flutter
         script: |
+          set -euo pipefail
           flutter config --no-enable-swift-package-manager
           flutter clean
           flutter pub get
 
-      - name: Install CocoaPods
+      - name: Rebuild clean iOS platform
         script: |
-          cd ios
-          rm -rf Pods Podfile.lock
-          pod install --repo-update
-          cd ..
+          set -euo pipefail
 
-      - name: Prepare iOS configuration only
+          echo "Generating a clean iOS project from the installed Flutter template..."
+
+          rm -rf /tmp/cinematy_ios_template
+
+          flutter create \
+            --platforms=ios \
+            --org com.cinematy \
+            --project-name app \
+            /tmp/cinematy_ios_template
+
+          rm -rf ios
+          cp -R /tmp/cinematy_ios_template/ios ./ios
+
+          echo "Fresh iOS project installed."
+          test -f ios/Runner.xcodeproj/project.pbxproj
+          test -f ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
+
+      - name: Apply Cinematy iOS settings
         script: |
+          set -euo pipefail
+
+          PLIST="ios/Runner/Info.plist"
+          PBX="ios/Runner.xcodeproj/project.pbxproj"
+
+          # App name
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName سينماتي" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string سينماتي" "$PLIST"
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName cinematy" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleName string cinematy" "$PLIST"
+
+          # Allow media endpoints that may still use HTTP.
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
+
+          # Portrait + landscape for the player.
+          /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:2 string UIInterfaceOrientationLandscapeRight" "$PLIST"
+
+          # Ensure exact bundle id and iOS 15 minimum.
+          sed -i '' 's/com\.cinematy\.app/com.cinematy.app/g' "$PBX"
+          perl -0pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBX"
+
+          echo "Bundle IDs found:"
+          grep -n "PRODUCT_BUNDLE_IDENTIFIER" "$PBX" || true
+          echo "Deployment targets:"
+          grep -n "IPHONEOS_DEPLOYMENT_TARGET" "$PBX" | head -20 || true
+
+      - name: Regenerate Flutter iOS files and icon
+        script: |
+          set -euo pipefail
+
+          flutter pub get
+
+          # Generate Cinematy app icon from the existing project asset.
+          dart run flutter_launcher_icons
+
+          # Prepare Generated.xcconfig and Flutter iOS build files only.
           flutter build ios \
             --release \
             --config-only \
             --no-codesign
 
+      - name: Install CocoaPods
+        script: |
+          set -euo pipefail
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      - name: Verify Xcode project
+        script: |
+          set -euo pipefail
+
+          echo "Schemes:"
+          xcodebuild -workspace ios/Runner.xcworkspace -list
+
+          test -f ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
+          test -f ios/Runner.xcodeproj/project.pbxproj
+
       - name: Build unsigned Release
         script: |
-          cd ios
+          set -euo pipefail
+
+          rm -rf build/ios/derived
 
           xcodebuild \
-            -workspace Runner.xcworkspace \
+            -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath ../build/ios/derived \
+            -derivedDataPath build/ios/derived \
+            CODE_SIGN_STYLE=Manual \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-          cd ..
-
-      - name: Find Runner app
+      - name: Verify built app
         script: |
-          APP_PATH="build/ios/derived/Build/Products/Release-iphoneos/Runner.app"
+          set -euo pipefail
 
-          if [ ! -d "$APP_PATH" ]; then
-            echo "ERROR: Runner.app not found"
-            find build -type d -name "*.app" -print
+          APP_PATH=$(find build/ios/derived/Build/Products \
+            -type d \
+            -path "*Release-iphoneos/Runner.app" \
+            -print \
+            -quit)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No Release Runner.app was generated."
+            find build/ios/derived/Build/Products -maxdepth 5 -print || true
             exit 1
           fi
 
-          echo "Runner.app found:"
-          du -sh "$APP_PATH"
+          echo "$APP_PATH" > /tmp/cinematy_runner_app
 
-      - name: Create Release ZIP
+          echo "Runner.app:"
+          echo "$APP_PATH"
+          du -sh "$APP_PATH"
+          ls -lah "$APP_PATH"
+
+          test -f "$APP_PATH/Info.plist"
+          test -f "$APP_PATH/Runner"
+
+          EXEC_SIZE=$(stat -f%z "$APP_PATH/Runner")
+          APP_KB=$(du -sk "$APP_PATH" | awk '{print $1}')
+
+          echo "Runner executable bytes: $EXEC_SIZE"
+          echo "Runner.app KB: $APP_KB"
+
+          if [ "$EXEC_SIZE" -lt 100000 ]; then
+            echo "ERROR: Runner executable is unexpectedly small."
+            exit 1
+          fi
+
+          if [ "$APP_KB" -lt 2048 ]; then
+            echo "ERROR: Runner.app is unexpectedly small."
+            exit 1
+          fi
+
+      - name: Create unsigned ZIP
         script: |
-          APP_PATH="build/ios/derived/Build/Products/Release-iphoneos/Runner.app"
+          set -euo pipefail
+
+          APP_PATH=$(cat /tmp/cinematy_runner_app)
 
           rm -rf build/ios/output
-          mkdir -p build/ios/output/package
+          mkdir -p build/ios/output
 
-          cp -R "$APP_PATH" \
-            build/ios/output/package/Runner.app
+          /usr/bin/ditto \
+            -c \
+            -k \
+            --sequesterRsrc \
+            --keepParent \
+            "$APP_PATH" \
+            build/ios/output/Cinematy-Release-Unsigned.zip
 
-          cd build/ios/output/package
-          zip -qry ../Cinematy-Release-Unsigned.zip Runner.app
-          cd ../../../..
+          ZIP="build/ios/output/Cinematy-Release-Unsigned.zip"
 
           echo "Final ZIP:"
-          ls -lh build/ios/output/Cinematy-Release-Unsigned.zip
+          ls -lh "$ZIP"
 
-          SIZE=$(stat -f%z build/ios/output/Cinematy-Release-Unsigned.zip)
+          ZIP_BYTES=$(stat -f%z "$ZIP")
+          echo "ZIP bytes: $ZIP_BYTES"
 
-          if [ "$SIZE" -lt 1000000 ]; then
-            echo "ERROR: ZIP is suspiciously small: $SIZE bytes"
+          if [ "$ZIP_BYTES" -lt 1000000 ]; then
+            echo "ERROR: Final ZIP is less than 1 MB."
+            exit 1
+          fi
+
+          echo "ZIP validation:"
+          unzip -t "$ZIP"
+
+    artifacts:
+      - build/ios/output/Cinematy-Release-Unsigned.zip
+
+  cinematy-ios-debug-unsigned:
+    name: Cinematy iOS Debug Unsigned ZIP
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+
+    scripts:
+      - name: Prepare clean iOS project
+        script: |
+          set -euo pipefail
+          flutter config --no-enable-swift-package-manager
+          flutter clean
+          flutter pub get
+
+          rm -rf /tmp/cinematy_ios_template
+          flutter create \
+            --platforms=ios \
+            --org com.cinematy \
+            --project-name app \
+            /tmp/cinematy_ios_template
+
+          rm -rf ios
+          cp -R /tmp/cinematy_ios_template/ios ./ios
+
+          PLIST="ios/Runner/Info.plist"
+          PBX="ios/Runner.xcodeproj/project.pbxproj"
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName سينماتي" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string سينماتي" "$PLIST"
+
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
+
+          perl -0pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBX"
+
+          flutter pub get
+          dart run flutter_launcher_icons
+          flutter build ios --debug --config-only --no-codesign
+
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      - name: Build unsigned Debug
+        script: |
+          set -euo pipefail
+
+          rm -rf build/ios/derived
+
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath build/ios/derived \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            build
+
+      - name: Package Debug ZIP
+        script: |
+          set -euo pipefail
+
+          APP_PATH=$(find build/ios/derived/Build/Products \
+            -type d \
+            -path "*Debug-iphoneos/Runner.app" \
+            -print \
+            -quit)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: Debug Runner.app not found."
+            exit 1
+          fi
+
+          test -f "$APP_PATH/Runner"
+          test -f "$APP_PATH/Info.plist"
+
+          du -sh "$APP_PATH"
+
+          rm -rf build/ios/output
+          mkdir -p build/ios/output
+
+          /usr/bin/ditto \
+            -c \
+            -k \
+            --sequesterRsrc \
+            --keepParent \
+            "$APP_PATH" \
+            build/ios/output/Cinematy-Debug-Unsigned.zip
+
+          ZIP="build/ios/output/Cinematy-Debug-Unsigned.zip"
+          ls -lh "$ZIP"
+
+          ZIP_BYTES=$(stat -f%z "$ZIP")
+          if [ "$ZIP_BYTES" -lt 1000000 ]; then
+            echo "ERROR: Debug ZIP is less than 1 MB."
             exit 1
           fi
 
     artifacts:
-      - build/ios/output/Cinematy-Release-Unsigned.zip
+      - build/ios/output/Cinematy-Debug-Unsigned.zip

@@ -1,6 +1,6 @@
 workflows:
-  ios-unsigned:
-    name: Cinematy iOS Unsigned
+  ios-unsigned-release:
+    name: Cinematy iOS Release Unsigned
     max_build_duration: 60
     instance_type: mac_mini_m2
 
@@ -14,10 +14,17 @@ workflows:
         script: |
           flutter config --no-enable-swift-package-manager
 
-      - name: Get Flutter packages
+      - name: Flutter packages
         script: |
           flutter clean
           flutter pub get
+
+      - name: Prepare iOS Release
+        script: |
+          flutter build ios \
+            --release \
+            --config-only \
+            --no-codesign
 
       - name: Install CocoaPods
         script: |
@@ -26,16 +33,34 @@ workflows:
           pod install --repo-update
           cd ..
 
-      - name: Build unsigned iOS
+      - name: Build Release without signing
         script: |
-          flutter build ios --debug --no-codesign
+          cd ios
+
+          xcodebuild \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath ../build/ios/derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+          cd ..
 
       - name: Create unsigned IPA
         script: |
           mkdir -p build/ios/ipa/Payload
-          cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+
+          cp -R \
+            build/ios/derived/Build/Products/Release-iphoneos/Runner.app \
+            build/ios/ipa/Payload/
+
           cd build/ios/ipa
-          zip -r Cinematy-unsigned.ipa Payload
+          zip -qry Cinematy-Release-Unsigned.ipa Payload
 
     artifacts:
-      - build/ios/ipa/Cinematy-unsigned.ipa
+      - build/ios/ipa/Cinematy-Release-Unsigned.ipa

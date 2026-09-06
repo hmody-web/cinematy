@@ -1,6 +1,6 @@
 workflows:
-  ios-debug-unsigned:
-    name: Cinematy iOS Debug Unsigned
+  cinematy-ios-unsigned:
+    name: Cinematy iOS Unsigned
     max_build_duration: 60
     instance_type: mac_mini_m2
 
@@ -10,64 +10,59 @@ workflows:
       cocoapods: default
 
     scripts:
-      - name: Disable Swift Package Manager
+      - name: Prepare Flutter
         script: |
           flutter config --no-enable-swift-package-manager
-
-      - name: Get packages
-        script: |
           flutter clean
           flutter pub get
 
       - name: Install CocoaPods
         script: |
           cd ios
-          rm -rf Pods Podfile.lock
           pod install --repo-update
           cd ..
 
-      - name: Build unsigned Debug app
+      - name: Build unsigned iOS app
         script: |
-          cd ios
+          flutter build ios --debug --no-codesign
 
-          xcodebuild \
-            -workspace Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Debug \
-            -sdk iphoneos \
-            -derivedDataPath ../build/ios/derived \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            build
-
-          cd ..
-
-      - name: Create IPA
+      - name: Verify Runner.app
         script: |
-          APP_PATH=$(find build/ios/derived -type d -name "Runner.app" | head -n 1)
+          APP="build/ios/iphoneos/Runner.app"
 
-          if [ -z "$APP_PATH" ]; then
-            echo "Runner.app not found"
+          if [ ! -d "$APP" ]; then
+            echo "ERROR: Runner.app not found"
+            find build/ios -maxdepth 5 -type d -name "*.app" -print
             exit 1
           fi
 
-          echo "Found app:"
-          echo "$APP_PATH"
+          echo "Runner.app found:"
+          du -sh "$APP"
 
-          du -sh "$APP_PATH"
-
+      - name: Create unsigned IPA
+        script: |
           rm -rf build/ios/ipa
           mkdir -p build/ios/ipa/Payload
 
-          cp -R "$APP_PATH" build/ios/ipa/Payload/Runner.app
+          cp -R build/ios/iphoneos/Runner.app \
+                build/ios/ipa/Payload/Runner.app
+
+          echo "Payload size:"
+          du -sh build/ios/ipa/Payload
 
           cd build/ios/ipa
-          zip -qry Cinematy-Debug-Unsigned.ipa Payload
+          zip -r -9 Cinematy-Unsigned.ipa Payload
 
-          echo "IPA created:"
-          ls -lh Cinematy-Debug-Unsigned.ipa
+          echo "Final IPA:"
+          ls -lh Cinematy-Unsigned.ipa
+
+          SIZE=$(stat -f%z Cinematy-Unsigned.ipa)
+
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "ERROR: IPA is suspiciously small: $SIZE bytes"
+            exit 1
+          fi
 
     artifacts:
-      - build/ios/ipa/Cinematy-Debug-Unsigned.ipa
+      - build/ios/ipa/Cinematy-Unsigned.ipa
+      - build/ios/iphoneos/Runner.app

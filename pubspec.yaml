@@ -1,0 +1,58 @@
+name: cinematy
+description: تطبيق سينمائي عربي سريع مبني بـ Flutter.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  dio: ^5.8.0+1
+  flutter_riverpod: ^2.6.1
+  cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.4.1
+  shared_preferences: ^2.5.3
+  path_provider: ^2.1.5
+  crypto: ^3.0.6
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.6
+  intl: ^0.20.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/
+    - assets/fonts/
+  fonts:
+    - family: Monadi
+      fonts:
+        - asset: assets/fonts/Monadi.ttf
+    - family: ArabicUI
+      fonts:
+        - asset: assets/fonts/ArabicUI.ttf
+    - family: Tajawal
+      fonts:
+        - asset: assets/fonts/Tajawal.ttf
+    - family: NizarCocon
+      fonts:
+        - asset: assets/fonts/NizarCocon.otf
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/branding/app_icon.jpg
+  remove_alpha_ios: true
+  adaptive_icon_background: "#070505"
+  adaptive_icon_foreground: assets/branding/app_icon.jpg

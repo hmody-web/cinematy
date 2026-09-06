@@ -1,19 +1,62 @@
-      - name: Find built app
+workflows:
+  ios-debug-unsigned:
+    name: Cinematy iOS Debug Unsigned
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+
+    scripts:
+      - name: Disable Swift Package Manager
         script: |
-          echo "Searching for Runner.app..."
-          APP_PATH=$(find build -type d -name "Runner.app" | head -n 1)
+          flutter config --no-enable-swift-package-manager
+
+      - name: Get packages
+        script: |
+          flutter clean
+          flutter pub get
+
+      - name: Install CocoaPods
+        script: |
+          cd ios
+          rm -rf Pods Podfile.lock
+          pod install --repo-update
+          cd ..
+
+      - name: Build unsigned Debug app
+        script: |
+          cd ios
+
+          xcodebuild \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath ../build/ios/derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+          cd ..
+
+      - name: Create IPA
+        script: |
+          APP_PATH=$(find build/ios/derived -type d -name "Runner.app" | head -n 1)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Runner.app was not found"
+            echo "Runner.app not found"
             exit 1
           fi
 
-          echo "$APP_PATH" > /tmp/runner_app_path.txt
-          du -sh "$APP_PATH"
+          echo "Found app:"
+          echo "$APP_PATH"
 
-      - name: Create unsigned IPA
-        script: |
-          APP_PATH=$(cat /tmp/runner_app_path.txt)
+          du -sh "$APP_PATH"
 
           rm -rf build/ios/ipa
           mkdir -p build/ios/ipa/Payload
@@ -21,9 +64,10 @@
           cp -R "$APP_PATH" build/ios/ipa/Payload/Runner.app
 
           cd build/ios/ipa
-          zip -qry Cinematy-Release-Unsigned.ipa Payload
+          zip -qry Cinematy-Debug-Unsigned.ipa Payload
 
-          ls -lh Cinematy-Release-Unsigned.ipa
+          echo "IPA created:"
+          ls -lh Cinematy-Debug-Unsigned.ipa
 
-        artifacts:
-      - build/ios/ipa/Cinematy-Release-Unsigned.ipa
+    artifacts:
+      - build/ios/ipa/Cinematy-Debug-Unsigned.ipa

@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 class AppColors {
   AppColors._();
 
-  static const background = Color.fromRGBO(13, 0, 0, 1);
-  static const surface = Color(0xFF170505);
-  static const surfaceHigh = Color(0xFF220909);
-  static const card = Color(0xFF1B0808);
+  static const background = Color.fromRGBO(7, 5, 5, 1);
+  static const surface = Color(0xFF100D0D);
+  static const surfaceHigh = Color(0xFF181313);
+  static const card = Color(0xFF141010);
   static const red = Color(0xFFE12820);
   static const redBright = Color(0xFFFF473D);
   static const white = Color(0xFFF8F6F6);
@@ -19,7 +19,7 @@ class AppColors {
 class AppTheme {
   AppTheme._();
 
-  static ThemeData get dark {
+  static ThemeData dark([String fontFamily = 'Monadi']) {
     final scheme = ColorScheme.fromSeed(
       seedColor: AppColors.red,
       brightness: Brightness.dark,
@@ -35,7 +35,7 @@ class AppTheme {
         secondary: AppColors.red,
         surface: AppColors.surface,
       ),
-      fontFamily: 'Monadi',
+      fontFamily: fontFamily,
       fontFamilyFallback: const ['SF Arabic', 'Noto Sans Arabic', 'Arial'],
       textTheme: const TextTheme(
         headlineLarge: TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.4),

@@ -9,19 +9,20 @@ import UIKit
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
 
-    // Native UIKit tab bar. We deliberately use UITabBar itself instead of
-    // painting a Flutter imitation, so newer iOS releases can provide their
-    // native system material / Liquid Glass appearance automatically.
-    if let registrar = self.registrar(forPlugin: "CinematyNativeTabBar") {
-      let factory = CinematyNativeTabBarFactory(messenger: registrar.messenger())
-      registrar.register(factory, withId: "cinematy/native_tab_bar")
+    // Register the UIKit view BEFORE Flutter tries to create UiKitView.
+    // This is a real UITabBar; Flutter only reserves its layout slot.
+    if let registrar = self.registrar(forPlugin: "CinematyNativeTabBarPlugin") {
+      registrar.register(
+        CinematyNativeTabBarFactory(messenger: registrar.messenger()),
+        withId: "cinematy/native_tab_bar"
+      )
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 }
 
-final class CinematyNativeTabBarFactory: NSObject, FlutterPlatformViewFactory {
+private final class CinematyNativeTabBarFactory: NSObject, FlutterPlatformViewFactory {
   private let messenger: FlutterBinaryMessenger
 
   init(messenger: FlutterBinaryMessenger) {
@@ -38,7 +39,7 @@ final class CinematyNativeTabBarFactory: NSObject, FlutterPlatformViewFactory {
     viewIdentifier viewId: Int64,
     arguments args: Any?
   ) -> FlutterPlatformView {
-    CinematyNativeTabBarView(
+    CinematyNativeTabBarPlatformView(
       frame: frame,
       viewId: viewId,
       messenger: messenger,
@@ -47,10 +48,11 @@ final class CinematyNativeTabBarFactory: NSObject, FlutterPlatformViewFactory {
   }
 }
 
-final class CinematyNativeTabBarView: NSObject, FlutterPlatformView, UITabBarDelegate {
-  private let rootView: UIView
+private final class CinematyNativeTabBarPlatformView: NSObject, FlutterPlatformView, UITabBarDelegate {
+  private let container: UIView
   private let tabBar: UITabBar
   private let channel: FlutterMethodChannel
+  private var isCompact = false
 
   init(
     frame: CGRect,
@@ -58,7 +60,7 @@ final class CinematyNativeTabBarView: NSObject, FlutterPlatformView, UITabBarDel
     messenger: FlutterBinaryMessenger,
     arguments: Any?
   ) {
-    rootView = UIView(frame: frame)
+    container = UIView(frame: frame)
     tabBar = UITabBar(frame: .zero)
     channel = FlutterMethodChannel(
       name: "cinematy/native_tab_bar_\(viewId)",
@@ -67,16 +69,22 @@ final class CinematyNativeTabBarView: NSObject, FlutterPlatformView, UITabBarDel
 
     super.init()
 
-    rootView.backgroundColor = .clear
-    rootView.isOpaque = false
-    rootView.semanticContentAttribute = .forceRightToLeft
+    container.backgroundColor = .clear
+    container.isOpaque = false
+    container.clipsToBounds = false
 
     tabBar.translatesAutoresizingMaskIntoConstraints = false
     tabBar.delegate = self
-    tabBar.semanticContentAttribute = .forceRightToLeft
-    tabBar.tintColor = UIColor(red: 1.0, green: 0.278, blue: 0.239, alpha: 1.0)
-    tabBar.unselectedItemTintColor = UIColor.secondaryLabel.withAlphaComponent(0.68)
+    tabBar.isTranslucent = true
+    tabBar.clipsToBounds = false
     tabBar.itemPositioning = .fill
+    tabBar.semanticContentAttribute = .forceRightToLeft
+
+    // Keep UIKit's native background/material completely untouched.
+    // On modern iOS this lets the system provide its own Liquid Glass style.
+    let selectedRed = UIColor(red: 0.96, green: 0.11, blue: 0.14, alpha: 1.0)
+    tabBar.tintColor = selectedRed
+    tabBar.unselectedItemTintColor = UIColor.secondaryLabel.withAlphaComponent(0.72)
 
     let items = [
       makeItem(title: "الرئيسية", normal: "house", selected: "house.fill", tag: 0),
@@ -84,63 +92,61 @@ final class CinematyNativeTabBarView: NSObject, FlutterPlatformView, UITabBarDel
       makeItem(title: "البحث", normal: "magnifyingglass", selected: "magnifyingglass", tag: 2),
       makeItem(title: "مكتبتي", normal: "rectangle.stack", selected: "rectangle.stack.fill", tag: 3),
     ]
-    tabBar.items = items
 
-    // We only customize item colors; the background/material remains UIKit's
-    // native tab-bar rendering rather than a hand-made blur.
-    let appearance = UITabBarAppearance()
-    appearance.configureWithDefaultBackground()
-
-    let red = UIColor(red: 1.0, green: 0.278, blue: 0.239, alpha: 1.0)
-    let selectedAttributes: [NSAttributedString.Key: Any] = [
-      .foregroundColor: red,
-      .font: UIFont.systemFont(ofSize: 10, weight: .semibold),
-    ]
     let normalAttributes: [NSAttributedString.Key: Any] = [
       .foregroundColor: UIColor.secondaryLabel.withAlphaComponent(0.72),
       .font: UIFont.systemFont(ofSize: 10, weight: .medium),
     ]
+    let selectedAttributes: [NSAttributedString.Key: Any] = [
+      .foregroundColor: selectedRed,
+      .font: UIFont.systemFont(ofSize: 10, weight: .semibold),
+    ]
 
-    for layout in [
-      appearance.stackedLayoutAppearance,
-      appearance.inlineLayoutAppearance,
-      appearance.compactInlineLayoutAppearance,
-    ] {
-      layout.selected.iconColor = red
-      layout.selected.titleTextAttributes = selectedAttributes
-      layout.normal.iconColor = UIColor.secondaryLabel.withAlphaComponent(0.72)
-      layout.normal.titleTextAttributes = normalAttributes
+    for item in items {
+      item.setTitleTextAttributes(normalAttributes, for: .normal)
+      item.setTitleTextAttributes(selectedAttributes, for: .selected)
     }
+    tabBar.items = items
 
-    tabBar.standardAppearance = appearance
-    if #available(iOS 15.0, *) {
-      tabBar.scrollEdgeAppearance = appearance
-    }
-
-    rootView.addSubview(tabBar)
+    container.addSubview(tabBar)
     NSLayoutConstraint.activate([
-      tabBar.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
-      tabBar.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
-      tabBar.topAnchor.constraint(equalTo: rootView.topAnchor),
-      tabBar.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
+      tabBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+      tabBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+      tabBar.topAnchor.constraint(equalTo: container.topAnchor),
+      tabBar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
     ])
 
-    let initialIndex = (arguments as? [String: Any])?["index"] as? Int ?? 0
+    let params = arguments as? [String: Any]
+    let initialIndex = (params?["index"] as? NSNumber)?.intValue ?? 0
+    let initialCompact = (params?["compact"] as? NSNumber)?.boolValue ?? false
     setSelectedIndex(initialIndex)
+    setCompact(initialCompact, animated: false)
 
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else {
         result(nil)
         return
       }
+
       switch call.method {
       case "setIndex":
-        if let index = call.arguments as? Int {
-          self.setSelectedIndex(index)
-        } else if let number = call.arguments as? NSNumber {
+        if let number = call.arguments as? NSNumber {
           self.setSelectedIndex(number.intValue)
+        } else if let index = call.arguments as? Int {
+          self.setSelectedIndex(index)
         }
         result(nil)
+
+      case "setCompact":
+        let compact: Bool
+        if let number = call.arguments as? NSNumber {
+          compact = number.boolValue
+        } else {
+          compact = call.arguments as? Bool ?? false
+        }
+        self.setCompact(compact, animated: true)
+        result(nil)
+
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -148,7 +154,7 @@ final class CinematyNativeTabBarView: NSObject, FlutterPlatformView, UITabBarDel
   }
 
   func view() -> UIView {
-    rootView
+    container
   }
 
   func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
@@ -157,9 +163,33 @@ final class CinematyNativeTabBarView: NSObject, FlutterPlatformView, UITabBarDel
 
   private func setSelectedIndex(_ index: Int) {
     guard let items = tabBar.items, items.indices.contains(index) else { return }
-    if tabBar.selectedItem !== items[index] {
-      tabBar.selectedItem = items[index]
+    tabBar.selectedItem = items[index]
+  }
+
+  private func setCompact(_ compact: Bool, animated: Bool) {
+    guard compact != isCompact || !animated else { return }
+    isCompact = compact
+
+    let changes = {
+      self.tabBar.transform = compact
+        ? CGAffineTransform(scaleX: 0.90, y: 0.90)
+        : .identity
+      self.tabBar.alpha = compact ? 0.97 : 1.0
     }
+
+    guard animated else {
+      changes()
+      return
+    }
+
+    UIView.animate(
+      withDuration: 0.34,
+      delay: 0,
+      usingSpringWithDamping: 0.82,
+      initialSpringVelocity: 0.20,
+      options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut],
+      animations: changes
+    )
   }
 
   private func makeItem(
@@ -168,17 +198,12 @@ final class CinematyNativeTabBarView: NSObject, FlutterPlatformView, UITabBarDel
     selected: String,
     tag: Int
   ) -> UITabBarItem {
-    UITabBarItem(
+    let item = UITabBarItem(
       title: title,
       image: UIImage(systemName: normal),
       selectedImage: UIImage(systemName: selected)
-    ).withTag(tag)
-  }
-}
-
-private extension UITabBarItem {
-  func withTag(_ value: Int) -> UITabBarItem {
-    tag = value
-    return self
+    )
+    item.tag = tag
+    return item
   }
 }

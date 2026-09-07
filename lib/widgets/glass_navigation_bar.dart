@@ -6,10 +6,9 @@ import 'package:flutter/services.dart';
 
 import '../core/theme/app_theme.dart';
 
-/// البار السفلي:
-/// - Android: Dock Flutter مصمم خصيصاً للتطبيق مع Safe Area أعلى من النسخة القديمة.
-/// - iOS: UITabBar حقيقي من UIKit عبر PlatformView، لذلك يتبنى شكل النظام الأصلي
-///   (ومن ضمنه Liquid Glass على إصدارات iOS التي توفره) بدل محاكاته داخل Flutter.
+/// Bottom navigation:
+/// - Android: compact cinematic glass dock with a full-height selected capsule.
+/// - iOS: native UITabBar through UIKit/Swift so the system owns its appearance.
 class GlassNavigationBar extends StatelessWidget {
   const GlassNavigationBar({
     super.key,
@@ -34,12 +33,12 @@ class GlassNavigationBar extends StatelessWidget {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final isIos = Platform.isIOS;
 
-    // Android يرتفع قليلاً عن الحافة مع Safe Area واضحة.
-    // iOS يترك المساحة للنظام والـUITabBar الحقيقي نفسه.
+    // Android: lower total height than before while still keeping a comfortable
+    // safe distance from gesture/navigation areas.
     final bottomGap = isIos
         ? 0.0
-        : (bottomInset > 0 ? bottomInset + 8.0 : 12.0);
-    final barHeight = isIos ? 56.0 + bottomInset : 72.0;
+        : (bottomInset > 0 ? bottomInset + 6.0 : 10.0);
+    final barHeight = isIos ? 56.0 + bottomInset : 56.0;
     final totalHeight = barHeight + bottomGap;
 
     return SizedBox(
@@ -47,8 +46,6 @@ class GlassNavigationBar extends StatelessWidget {
       child: Stack(
         alignment: Alignment.bottomCenter,
         children: [
-          // التدرج يبدأ من آخر نقطة بالشاشة بلون النظام ويصبح شفافاً
-          // عند الخط العلوي للبار، حتى يندمج البار مع المحتوى بدون قطع حاد.
           Positioned.fill(
             child: IgnorePointer(
               child: DecoratedBox(
@@ -58,11 +55,11 @@ class GlassNavigationBar extends StatelessWidget {
                     end: Alignment.topCenter,
                     colors: [
                       AppColors.background,
-                      AppColors.background.withOpacity(.94),
-                      AppColors.background.withOpacity(.62),
+                      AppColors.background.withOpacity(.95),
+                      AppColors.background.withOpacity(.58),
                       Colors.transparent,
                     ],
-                    stops: const [0.0, .30, .68, 1.0],
+                    stops: const [0.0, .34, .72, 1.0],
                   ),
                 ),
               ),
@@ -70,22 +67,26 @@ class GlassNavigationBar extends StatelessWidget {
           ),
           Padding(
             padding: EdgeInsets.only(bottom: bottomGap),
-            child: AnimatedScale(
-              scale: compact ? .90 : 1.0,
-              alignment: Alignment.bottomCenter,
-              duration: const Duration(milliseconds: 300),
-              curve: compact ? Curves.easeOutCubic : Curves.easeOutBack,
-              child: isIos
-                  ? _NativeIosTabBar(
-                      index: index,
-                      onChanged: onChanged,
-                      height: barHeight,
-                    )
-                  : _AndroidFilmDock(
+            child: isIos
+                // IMPORTANT: never wrap UiKitView in a Flutter scale/transform.
+                // iOS platform views can disappear or composite incorrectly when
+                // transformed by Flutter. The native Swift view handles compacting.
+                ? _NativeIosTabBar(
+                    index: index,
+                    onChanged: onChanged,
+                    height: barHeight,
+                    compact: compact,
+                  )
+                : AnimatedScale(
+                    scale: compact ? .90 : 1.0,
+                    alignment: Alignment.bottomCenter,
+                    duration: const Duration(milliseconds: 280),
+                    curve: compact ? Curves.easeOutCubic : Curves.easeOutBack,
+                    child: _AndroidGlassDock(
                       index: index,
                       onChanged: onChanged,
                     ),
-            ),
+                  ),
           ),
         ],
       ),
@@ -98,11 +99,13 @@ class _NativeIosTabBar extends StatefulWidget {
     required this.index,
     required this.onChanged,
     required this.height,
+    required this.compact,
   });
 
   final int index;
   final ValueChanged<int> onChanged;
   final double height;
+  final bool compact;
 
   @override
   State<_NativeIosTabBar> createState() => _NativeIosTabBarState();
@@ -110,12 +113,17 @@ class _NativeIosTabBar extends StatefulWidget {
 
 class _NativeIosTabBarState extends State<_NativeIosTabBar> {
   MethodChannel? _channel;
+  bool _created = false;
 
   @override
   void didUpdateWidget(covariant _NativeIosTabBar oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!_created) return;
     if (oldWidget.index != widget.index) {
       _channel?.invokeMethod<void>('setIndex', widget.index);
+    }
+    if (oldWidget.compact != widget.compact) {
+      _channel?.invokeMethod<void>('setCompact', widget.compact);
     }
   }
 
@@ -131,11 +139,15 @@ class _NativeIosTabBarState extends State<_NativeIosTabBar> {
       }
     });
     _channel = channel;
+    _created = true;
+    // Send state after UIKit has created the actual native view.
     channel.invokeMethod<void>('setIndex', widget.index);
+    channel.invokeMethod<void>('setCompact', widget.compact);
   }
 
   @override
   void dispose() {
+    _created = false;
     _channel?.setMethodCallHandler(null);
     _channel = null;
     super.dispose();
@@ -148,67 +160,297 @@ class _NativeIosTabBarState extends State<_NativeIosTabBar> {
       width: double.infinity,
       child: UiKitView(
         viewType: 'cinematy/native_tab_bar',
-        creationParams: <String, dynamic>{'index': widget.index},
+        creationParams: <String, dynamic>{
+          'index': widget.index,
+          'compact': widget.compact,
+        },
         creationParamsCodec: const StandardMessageCodec(),
         onPlatformViewCreated: _onPlatformViewCreated,
+        layoutDirection: TextDirection.ltr,
       ),
     );
   }
 }
 
-class _AndroidFilmDock extends StatelessWidget {
-  const _AndroidFilmDock({required this.index, required this.onChanged});
+class _AndroidGlassDock extends StatefulWidget {
+  const _AndroidGlassDock({required this.index, required this.onChanged});
 
   final int index;
   final ValueChanged<int> onChanged;
 
   @override
+  State<_AndroidGlassDock> createState() => _AndroidGlassDockState();
+}
+
+class _AndroidGlassDockState extends State<_AndroidGlassDock>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _indicatorController;
+  double _visualIndex = 0;
+  double _animationFrom = 0;
+  double _animationTo = 0;
+  bool _dragging = false;
+  int _lastHapticIndex = -1;
+
+  static const double _barHeight = 56;
+  static const double _innerPadding = 5;
+
+  @override
+  void initState() {
+    super.initState();
+    _visualIndex = widget.index.toDouble();
+    _animationFrom = _visualIndex;
+    _animationTo = _visualIndex;
+    _indicatorController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+    )..addListener(() {
+        if (!mounted) return;
+        final t = Curves.easeOutCubic.transform(_indicatorController.value);
+        setState(() {
+          _visualIndex = lerpDouble(_animationFrom, _animationTo, t) ??
+              _animationTo;
+        });
+      });
+  }
+
+  @override
+  void didUpdateWidget(covariant _AndroidGlassDock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_dragging && oldWidget.index != widget.index) {
+      _animateIndicatorTo(widget.index.toDouble());
+    }
+  }
+
+  @override
+  void dispose() {
+    _indicatorController.dispose();
+    super.dispose();
+  }
+
+  void _animateIndicatorTo(double target, {bool quick = false}) {
+    _indicatorController.stop();
+    _animationFrom = _visualIndex;
+    _animationTo = target.clamp(0.0, 3.0).toDouble();
+    _indicatorController.duration = Duration(milliseconds: quick ? 250 : 360);
+    _indicatorController.forward(from: 0);
+  }
+
+  double _logicalIndexForX(double x, double width) {
+    final usable = width - (_innerPadding * 2);
+    if (usable <= 0) return widget.index.toDouble();
+    final itemWidth = usable / GlassNavigationBar._items.length;
+    final local = (x - _innerPadding).clamp(0.0, usable).toDouble();
+    // RTL: item 0 is on the far right, item 3 on the far left.
+    final logical = ((usable - local) / itemWidth) - .5;
+    return logical.clamp(0.0, 3.0).toDouble();
+  }
+
+  void _onDragStart(DragStartDetails details, double width) {
+    _indicatorController.stop();
+    _dragging = true;
+    _lastHapticIndex = _visualIndex.round();
+    final next = _logicalIndexForX(details.localPosition.dx, width);
+    setState(() => _visualIndex = next);
+  }
+
+  void _onDragUpdate(DragUpdateDetails details, double width) {
+    final next = _logicalIndexForX(details.localPosition.dx, width);
+    final nearest = next.round().clamp(0, 3).toInt();
+    if (nearest != _lastHapticIndex) {
+      _lastHapticIndex = nearest;
+      HapticFeedback.selectionClick();
+    }
+    setState(() => _visualIndex = next);
+  }
+
+  void _onDragEnd(DragEndDetails details) {
+    final target = _visualIndex.round().clamp(0, 3).toInt();
+    _dragging = false;
+    _animateIndicatorTo(target.toDouble(), quick: true);
+    if (target != widget.index) widget.onChanged(target);
+  }
+
+  void _select(int i) {
+    HapticFeedback.selectionClick();
+    _dragging = false;
+    _animateIndicatorTo(i.toDouble());
+    if (i != widget.index) widget.onChanged(i);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(31),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-          child: CustomPaint(
-            painter: const _FilmDockPainter(),
-            child: Container(
-              height: 72,
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 7),
-              decoration: BoxDecoration(
-                color: const Color(0xE8110A0A),
-                borderRadius: BorderRadius.circular(31),
-                border: Border.all(color: Colors.white.withOpacity(.095)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(.42),
-                    blurRadius: 34,
-                    offset: const Offset(0, 15),
-                  ),
-                  BoxShadow(
-                    color: AppColors.redBright.withOpacity(.055),
-                    blurRadius: 26,
-                  ),
-                ],
-              ),
-              child: Directionality(
-                textDirection: TextDirection.rtl,
-                child: Row(
-                  children: List.generate(GlassNavigationBar._items.length, (i) {
-                    final selected = i == index;
-                    final item = GlassNavigationBar._items[i];
-                    return Expanded(
-                      child: _DockItem(
-                        icon: item.icon,
-                        label: item.label,
-                        selected: selected,
-                        onTap: () => onChanged(i),
+      child: RepaintBoundary(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: (d) => _onDragStart(d, constraints.maxWidth),
+              onHorizontalDragUpdate: (d) => _onDragUpdate(d, constraints.maxWidth),
+              onHorizontalDragEnd: _onDragEnd,
+              child: Container(
+                height: _barHeight,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(23),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(.18),
+                      blurRadius: 18,
+                      offset: const Offset(0, 7),
+                      spreadRadius: -5,
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(23),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        // Uniform translucent tint: no fake black/white split.
+                        color: Colors.white.withOpacity(.065),
+                        borderRadius: BorderRadius.circular(23),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(.16),
+                          width: .85,
+                        ),
                       ),
-                    );
-                  }),
+                      child: Stack(
+                        children: [
+                          // A restrained glass reflection along the rim only.
+                          Positioned(
+                            left: 18,
+                            right: 18,
+                            top: .8,
+                            child: IgnorePointer(
+                              child: Container(
+                                height: .8,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(99),
+                                  color: Colors.white.withOpacity(.20),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned.fill(
+                            child: Padding(
+                              padding: const EdgeInsets.all(_innerPadding),
+                              child: LayoutBuilder(
+                                builder: (context, inner) {
+                                  final count = GlassNavigationBar._items.length;
+                                  final itemWidth = inner.maxWidth / count;
+                                  final indicatorWidth = itemWidth - 5;
+                                  final left = (count - 1 - _visualIndex) * itemWidth +
+                                      (itemWidth - indicatorWidth) / 2;
+
+                                  return Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      Positioned(
+                                        left: left,
+                                        top: 0,
+                                        bottom: 0,
+                                        width: indicatorWidth,
+                                        child: const _LiquidSelectionPill(),
+                                      ),
+                                      Directionality(
+                                        textDirection: TextDirection.rtl,
+                                        child: Row(
+                                          children: List.generate(count, (i) {
+                                            final item = GlassNavigationBar._items[i];
+                                            final proximity =
+                                                (1.0 - (_visualIndex - i).abs())
+                                                    .clamp(0.0, 1.0)
+                                                    .toDouble();
+                                            return Expanded(
+                                              child: _GlassDockButton(
+                                                icon: item.icon,
+                                                label: item.label,
+                                                proximity: proximity,
+                                                onTap: () => _select(i),
+                                              ),
+                                            );
+                                          }),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _LiquidSelectionPill extends StatelessWidget {
+  const _LiquidSelectionPill();
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            color: AppColors.redBright.withOpacity(.115),
+            border: Border.all(
+              color: AppColors.redBright.withOpacity(.32),
+              width: .8,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.redBright.withOpacity(.10),
+                blurRadius: 15,
+                spreadRadius: -5,
+              ),
+              BoxShadow(
+                color: Colors.white.withOpacity(.07),
+                blurRadius: 2,
+                offset: const Offset(0, -1),
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              Positioned(
+                left: 12,
+                right: 12,
+                top: .7,
+                child: Container(
+                  height: .9,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    color: Colors.white.withOpacity(.17),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 14,
+                right: 14,
+                bottom: 1.2,
+                child: Container(
+                  height: 1.2,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    color: AppColors.redBright.withOpacity(.50),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -216,135 +458,84 @@ class _AndroidFilmDock extends StatelessWidget {
   }
 }
 
-class _DockItem extends StatelessWidget {
-  const _DockItem({
+class _GlassDockButton extends StatefulWidget {
+  const _GlassDockButton({
     required this.icon,
     required this.label,
-    required this.selected,
+    required this.proximity,
     required this.onTap,
   });
 
   final IconData icon;
   final String label;
-  final bool selected;
+  final double proximity;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Semantics(
-        selected: selected,
-        button: true,
-        label: label,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(24),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 320),
-              curve: Curves.easeOutCubic,
-              margin: const EdgeInsets.symmetric(horizontal: 2),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(24),
-                color: selected
-                    ? AppColors.redBright.withOpacity(.085)
-                    : Colors.transparent,
-                border: Border.all(
-                  color: selected
-                      ? AppColors.redBright.withOpacity(.18)
-                      : Colors.transparent,
-                ),
-              ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  if (selected)
-                    Positioned(
-                      top: 4,
-                      child: Container(
-                        width: 28,
-                        height: 2,
-                        decoration: BoxDecoration(
-                          color: AppColors.redBright,
-                          borderRadius: BorderRadius.circular(99),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.redBright.withOpacity(.5),
-                              blurRadius: 9,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  AnimatedPadding(
-                    duration: const Duration(milliseconds: 280),
-                    curve: Curves.easeOutCubic,
-                    padding: EdgeInsets.only(top: selected ? 7 : 0),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          icon,
-                          size: selected ? 22 : 20,
-                          color: selected
-                              ? AppColors.redBright
-                              : Colors.white.withOpacity(.48),
-                        ),
-                        AnimatedSize(
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeOutCubic,
-                          child: selected
-                              ? Padding(
-                                  padding: const EdgeInsets.only(top: 4),
-                                  child: Text(
-                                    label,
-                                    maxLines: 1,
-                                    style: const TextStyle(
-                                      color: AppColors.redBright,
-                                      fontSize: 9.5,
-                                      fontWeight: FontWeight.w900,
-                                      height: 1,
-                                    ),
-                                  ),
-                                )
-                              : const SizedBox(height: 0),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
+  State<_GlassDockButton> createState() => _GlassDockButtonState();
 }
 
-class _FilmDockPainter extends CustomPainter {
-  const _FilmDockPainter();
+class _GlassDockButtonState extends State<_GlassDockButton> {
+  bool _pressed = false;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = Colors.white.withOpacity(.025);
-    const w = 8.0;
-    const h = 3.0;
-    for (double x = 18; x < size.width - 18; x += 22) {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, 5, w, h),
-          const Radius.circular(2),
+  Widget build(BuildContext context) {
+    final p = widget.proximity.clamp(0.0, 1.0).toDouble();
+    final iconColor = Color.lerp(
+      Colors.white.withOpacity(.55),
+      AppColors.redBright,
+      p,
+    )!;
+    final labelColor = Color.lerp(
+      Colors.white.withOpacity(.43),
+      AppColors.redBright,
+      p,
+    )!;
+
+    return Semantics(
+      button: true,
+      selected: p > .85,
+      label: widget.label,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapCancel: () => setState(() => _pressed = false),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _pressed ? .94 : (1 + (.025 * p)),
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOutCubic,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                widget.icon,
+                size: 20.5 + (1.8 * p),
+                color: iconColor,
+              ),
+              const SizedBox(height: 2.5),
+              Opacity(
+                opacity: .68 + (.32 * p),
+                child: Text(
+                  widget.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.fade,
+                  softWrap: false,
+                  style: TextStyle(
+                    color: labelColor,
+                    fontSize: 9.5 + (.5 * p),
+                    fontWeight: p > .55 ? FontWeight.w800 : FontWeight.w600,
+                    height: 1,
+                    letterSpacing: -.12,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-        paint,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, size.height - 8, w, h),
-          const Radius.circular(2),
-        ),
-        paint,
-      );
-    }
+      ),
+    );
   }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

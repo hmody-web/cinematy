@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/app_theme.dart';
 import 'features/shell/cinematy_shell.dart';
 import 'providers.dart';
+import 'widgets/glass_navigation_bar.dart';
 
 class CinematyApp extends ConsumerWidget {
   const CinematyApp({super.key});
@@ -18,6 +19,7 @@ class CinematyApp extends ConsumerWidget {
       theme: AppTheme.dark(settings.fontFamily),
       locale: const Locale('ar'),
       supportedLocales: const [Locale('ar')],
+      navigatorObservers: [nativeIosTabBarRouteObserver],
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,

@@ -38,7 +38,7 @@ class GlassNavigationBar extends StatelessWidget {
     final bottomGap = isIos
         ? 0.0
         : (bottomInset > 0 ? bottomInset + 6.0 : 10.0);
-    final barHeight = isIos ? 56.0 + bottomInset : 56.0;
+    final barHeight = isIos ? 49.0 + bottomInset : 56.0;
     final totalHeight = barHeight + bottomGap;
 
     return SizedBox(
@@ -68,10 +68,9 @@ class GlassNavigationBar extends StatelessWidget {
           Padding(
             padding: EdgeInsets.only(bottom: bottomGap),
             child: isIos
-                // IMPORTANT: never wrap UiKitView in a Flutter scale/transform.
-                // iOS platform views can disappear or composite incorrectly when
-                // transformed by Flutter. The native Swift view handles compacting.
-                ? _NativeIosTabBar(
+                // iOS only reserves layout here; the real UITabBar is mounted
+                // by AppDelegate above Flutter and cannot disappear in compositing.
+                ? _NativeIosTabBarBridge(
                     index: index,
                     onChanged: onChanged,
                     height: barHeight,
@@ -94,8 +93,151 @@ class GlassNavigationBar extends StatelessWidget {
   }
 }
 
-class _NativeIosTabBar extends StatefulWidget {
-  const _NativeIosTabBar({
+/// iOS uses a UIKit UITabBar that is mounted directly above Flutter's root
+/// view by AppDelegate. Flutter only keeps its reserved bottom space here and
+/// synchronizes selection / compact state through one MethodChannel.
+///
+/// This deliberately avoids UiKitView. A platform view inside Scaffold's
+/// bottomNavigationBar can be composited out on some iOS/Flutter combinations;
+/// mounting the real UITabBar in the native view hierarchy removes that failure
+/// mode and keeps the system-owned appearance (including Liquid Glass where the
+/// installed iOS version provides it).
+class NativeIosTabBarController {
+  NativeIosTabBarController._();
+
+  static const MethodChannel _channel = MethodChannel('cinematy/native_tab_bar');
+
+  static ValueChanged<int>? _onChanged;
+  static bool _handlerInstalled = false;
+  static bool _hostAttached = false;
+  static bool _routeVisible = true;
+  static int _index = 0;
+  static bool _compact = false;
+  static int _syncSerial = 0;
+
+  static void attach({
+    required int index,
+    required bool compact,
+    required ValueChanged<int> onChanged,
+  }) {
+    if (!Platform.isIOS) return;
+    _hostAttached = true;
+    _index = index.clamp(0, 3).toInt();
+    _compact = compact;
+    _onChanged = onChanged;
+    _installHandler();
+    _sync(retryUntilNativeReady: true);
+  }
+
+  static void update({
+    required int index,
+    required bool compact,
+    required ValueChanged<int> onChanged,
+  }) {
+    if (!Platform.isIOS) return;
+    _index = index.clamp(0, 3).toInt();
+    _compact = compact;
+    _onChanged = onChanged;
+    _installHandler();
+    _sync();
+  }
+
+  static void detach(ValueChanged<int> onChanged) {
+    if (!Platform.isIOS) return;
+    if (identical(_onChanged, onChanged)) {
+      _onChanged = null;
+    }
+    _hostAttached = false;
+    _sync();
+  }
+
+  static void setRouteVisible(bool visible) {
+    if (!Platform.isIOS) return;
+    if (_routeVisible == visible) return;
+    _routeVisible = visible;
+    _sync(retryUntilNativeReady: visible && _hostAttached);
+  }
+
+  static void _installHandler() {
+    if (_handlerInstalled) return;
+    _handlerInstalled = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method != 'tabChanged') return;
+      final raw = call.arguments;
+      final value = raw is int ? raw : int.tryParse('$raw');
+      if (value == null || value < 0 || value > 3) return;
+      final callback = _onChanged;
+      if (callback != null) callback(value);
+    });
+  }
+
+  static Future<void> _sync({bool retryUntilNativeReady = false}) async {
+    if (!Platform.isIOS) return;
+    final serial = ++_syncSerial;
+    final attempts = retryUntilNativeReady ? 24 : 1;
+
+    for (var attempt = 0; attempt < attempts; attempt++) {
+      if (serial != _syncSerial) return;
+      try {
+        final ready = await _channel.invokeMethod<bool>('ping') ?? false;
+        if (ready) {
+          if (serial != _syncSerial) return;
+          await _channel.invokeMethod<void>('setIndex', _index);
+          await _channel.invokeMethod<void>('setCompact', _compact);
+          await _channel.invokeMethod<void>(
+            'setVisible',
+            _hostAttached && _routeVisible,
+          );
+          return;
+        }
+      } on MissingPluginException {
+        // AppDelegate may still be finishing the native view installation.
+      } on PlatformException {
+        // Retry below when requested; otherwise leave Flutter fully usable.
+      }
+
+      if (!retryUntilNativeReady || attempt == attempts - 1) return;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
+  }
+}
+
+/// Keeps the native UIKit bar hidden while a Flutter route (details, player,
+/// modal sheet, etc.) is above the root CinematyShell, then restores it on pop.
+class NativeIosTabBarRouteObserver extends NavigatorObserver {
+  void _syncFor(Route<dynamic>? route) {
+    NativeIosTabBarController.setRouteVisible(route?.isFirst ?? false);
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPush(route, previousRoute);
+    _syncFor(route);
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPop(route, previousRoute);
+    _syncFor(previousRoute);
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didRemove(route, previousRoute);
+    _syncFor(previousRoute);
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    super.didReplace(newRoute: newRoute, oldRoute: oldRoute);
+    _syncFor(newRoute);
+  }
+}
+
+final nativeIosTabBarRouteObserver = NativeIosTabBarRouteObserver();
+
+class _NativeIosTabBarBridge extends StatefulWidget {
+  const _NativeIosTabBarBridge({
     required this.index,
     required this.onChanged,
     required this.height,
@@ -108,66 +250,45 @@ class _NativeIosTabBar extends StatefulWidget {
   final bool compact;
 
   @override
-  State<_NativeIosTabBar> createState() => _NativeIosTabBarState();
+  State<_NativeIosTabBarBridge> createState() => _NativeIosTabBarBridgeState();
 }
 
-class _NativeIosTabBarState extends State<_NativeIosTabBar> {
-  MethodChannel? _channel;
-  bool _created = false;
-
+class _NativeIosTabBarBridgeState extends State<_NativeIosTabBarBridge> {
   @override
-  void didUpdateWidget(covariant _NativeIosTabBar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (!_created) return;
-    if (oldWidget.index != widget.index) {
-      _channel?.invokeMethod<void>('setIndex', widget.index);
-    }
-    if (oldWidget.compact != widget.compact) {
-      _channel?.invokeMethod<void>('setCompact', widget.compact);
-    }
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      NativeIosTabBarController.attach(
+        index: widget.index,
+        compact: widget.compact,
+        onChanged: widget.onChanged,
+      );
+    });
   }
 
-  void _onPlatformViewCreated(int id) {
-    final channel = MethodChannel('cinematy/native_tab_bar_$id');
-    channel.setMethodCallHandler((call) async {
-      if (call.method == 'tabChanged') {
-        final raw = call.arguments;
-        final value = raw is int ? raw : int.tryParse('$raw');
-        if (value != null && value >= 0 && value <= 3) {
-          widget.onChanged(value);
-        }
-      }
-    });
-    _channel = channel;
-    _created = true;
-    // Send state after UIKit has created the actual native view.
-    channel.invokeMethod<void>('setIndex', widget.index);
-    channel.invokeMethod<void>('setCompact', widget.compact);
+  @override
+  void didUpdateWidget(covariant _NativeIosTabBarBridge oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    NativeIosTabBarController.update(
+      index: widget.index,
+      compact: widget.compact,
+      onChanged: widget.onChanged,
+    );
   }
 
   @override
   void dispose() {
-    _created = false;
-    _channel?.setMethodCallHandler(null);
-    _channel = null;
+    NativeIosTabBarController.detach(widget.onChanged);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: widget.height,
-      width: double.infinity,
-      child: UiKitView(
-        viewType: 'cinematy/native_tab_bar',
-        creationParams: <String, dynamic>{
-          'index': widget.index,
-          'compact': widget.compact,
-        },
-        creationParamsCodec: const StandardMessageCodec(),
-        onPlatformViewCreated: _onPlatformViewCreated,
-        layoutDirection: TextDirection.ltr,
-      ),
+    // The actual UITabBar lives in UIKit. This box only reserves exactly the
+    // same vertical area inside Flutter so content and the native bar align.
+    return IgnorePointer(
+      child: SizedBox(height: widget.height, width: double.infinity),
     );
   }
 }
@@ -185,10 +306,12 @@ class _AndroidGlassDock extends StatefulWidget {
 class _AndroidGlassDockState extends State<_AndroidGlassDock>
     with SingleTickerProviderStateMixin {
   late final AnimationController _indicatorController;
+
   double _visualIndex = 0;
   double _animationFrom = 0;
   double _animationTo = 0;
   bool _dragging = false;
+  bool _touching = false;
   int _lastHapticIndex = -1;
 
   static const double _barHeight = 56;
@@ -202,10 +325,10 @@ class _AndroidGlassDockState extends State<_AndroidGlassDock>
     _animationTo = _visualIndex;
     _indicatorController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 360),
+      duration: const Duration(milliseconds: 420),
     )..addListener(() {
         if (!mounted) return;
-        final t = Curves.easeOutCubic.transform(_indicatorController.value);
+        final t = Curves.easeInOutCubic.transform(_indicatorController.value);
         setState(() {
           _visualIndex = lerpDouble(_animationFrom, _animationTo, t) ??
               _animationTo;
@@ -227,11 +350,17 @@ class _AndroidGlassDockState extends State<_AndroidGlassDock>
     super.dispose();
   }
 
+  void _setTouching(bool value) {
+    if (_touching == value || !mounted) return;
+    setState(() => _touching = value);
+  }
+
   void _animateIndicatorTo(double target, {bool quick = false}) {
     _indicatorController.stop();
     _animationFrom = _visualIndex;
     _animationTo = target.clamp(0.0, 3.0).toDouble();
-    _indicatorController.duration = Duration(milliseconds: quick ? 250 : 360);
+    _indicatorController.duration =
+        Duration(milliseconds: quick ? 270 : 420);
     _indicatorController.forward(from: 0);
   }
 
@@ -240,7 +369,8 @@ class _AndroidGlassDockState extends State<_AndroidGlassDock>
     if (usable <= 0) return widget.index.toDouble();
     final itemWidth = usable / GlassNavigationBar._items.length;
     final local = (x - _innerPadding).clamp(0.0, usable).toDouble();
-    // RTL: item 0 is on the far right, item 3 on the far left.
+
+    // RTL: الرئيسية في أقصى اليمين، مكتبتي في أقصى اليسار.
     final logical = ((usable - local) / itemWidth) - .5;
     return logical.clamp(0.0, 3.0).toDouble();
   }
@@ -260,21 +390,29 @@ class _AndroidGlassDockState extends State<_AndroidGlassDock>
       _lastHapticIndex = nearest;
       HapticFeedback.selectionClick();
     }
+    // لا يوجد AnimatedWidget هنا عمداً؛ المؤشر يتبع الإصبع frame-by-frame
+    // بلا تأخير أو مطاردة متأخرة خلف حركة المستخدم.
     setState(() => _visualIndex = next);
   }
 
-  void _onDragEnd(DragEndDetails details) {
+  void _onDragEnd() {
     final target = _visualIndex.round().clamp(0, 3).toInt();
     _dragging = false;
     _animateIndicatorTo(target.toDouble(), quick: true);
     if (target != widget.index) widget.onChanged(target);
   }
 
-  void _select(int i) {
+  void _onDragCancel() {
+    _dragging = false;
+    _animateIndicatorTo(widget.index.toDouble(), quick: true);
+  }
+
+  void _selectFromX(double x, double width) {
+    final target = _logicalIndexForX(x, width).round().clamp(0, 3).toInt();
     HapticFeedback.selectionClick();
     _dragging = false;
-    _animateIndicatorTo(i.toDouble());
-    if (i != widget.index) widget.onChanged(i);
+    _animateIndicatorTo(target.toDouble());
+    if (target != widget.index) widget.onChanged(target);
   }
 
   @override
@@ -284,103 +422,145 @@ class _AndroidGlassDockState extends State<_AndroidGlassDock>
       child: RepaintBoundary(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            return GestureDetector(
+            return Listener(
               behavior: HitTestBehavior.opaque,
-              onHorizontalDragStart: (d) => _onDragStart(d, constraints.maxWidth),
-              onHorizontalDragUpdate: (d) => _onDragUpdate(d, constraints.maxWidth),
-              onHorizontalDragEnd: _onDragEnd,
-              child: Container(
-                height: _barHeight,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(23),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(.18),
-                      blurRadius: 18,
-                      offset: const Offset(0, 7),
-                      spreadRadius: -5,
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(23),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        // Uniform translucent tint: no fake black/white split.
-                        color: Colors.white.withOpacity(.065),
-                        borderRadius: BorderRadius.circular(23),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(.16),
-                          width: .85,
+              onPointerDown: (_) => _setTouching(true),
+              onPointerUp: (_) => _setTouching(false),
+              onPointerCancel: (_) => _setTouching(false),
+              child: AnimatedScale(
+                // 0.5% بالضبط: استجابة محسوسة من دون أن يقفز البار بصرياً.
+                scale: _touching ? 1.005 : 1.0,
+                alignment: Alignment.bottomCenter,
+                duration: Duration(milliseconds: _touching ? 85 : 230),
+                curve: _touching ? Curves.easeOutCubic : Curves.easeOutBack,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (d) =>
+                      _selectFromX(d.localPosition.dx, constraints.maxWidth),
+                  onHorizontalDragStart: (d) =>
+                      _onDragStart(d, constraints.maxWidth),
+                  onHorizontalDragUpdate: (d) =>
+                      _onDragUpdate(d, constraints.maxWidth),
+                  onHorizontalDragEnd: (_) => _onDragEnd(),
+                  onHorizontalDragCancel: _onDragCancel,
+                  child: Container(
+                    height: _barHeight,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(23),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(.20),
+                          blurRadius: 20,
+                          offset: const Offset(0, 8),
+                          spreadRadius: -7,
                         ),
-                      ),
-                      child: Stack(
-                        children: [
-                          // A restrained glass reflection along the rim only.
-                          Positioned(
-                            left: 18,
-                            right: 18,
-                            top: .8,
-                            child: IgnorePointer(
-                              child: Container(
-                                height: .8,
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(99),
-                                  color: Colors.white.withOpacity(.20),
-                                ),
-                              ),
+                        BoxShadow(
+                          color: AppColors.redBright.withOpacity(.025),
+                          blurRadius: 22,
+                          spreadRadius: -10,
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(23),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 34, sigmaY: 34),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            // طبقة موحدة بالكامل. لا يوجد شريط أبيض بالأعلى
+                            // ولا تدرج وهمي داخل سطح الزجاج نفسه.
+                            color: Colors.black.withOpacity(.16),
+                            borderRadius: BorderRadius.circular(23),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(.10),
+                              width: .75,
                             ),
                           ),
-                          Positioned.fill(
-                            child: Padding(
-                              padding: const EdgeInsets.all(_innerPadding),
-                              child: LayoutBuilder(
-                                builder: (context, inner) {
-                                  final count = GlassNavigationBar._items.length;
-                                  final itemWidth = inner.maxWidth / count;
-                                  final indicatorWidth = itemWidth - 5;
-                                  final left = (count - 1 - _visualIndex) * itemWidth +
-                                      (itemWidth - indicatorWidth) / 2;
+                          child: Padding(
+                            padding: const EdgeInsets.all(_innerPadding),
+                            child: LayoutBuilder(
+                              builder: (context, inner) {
+                                final count = GlassNavigationBar._items.length;
+                                final itemWidth = inner.maxWidth / count;
 
-                                  return Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      Positioned(
-                                        left: left,
-                                        top: 0,
-                                        bottom: 0,
-                                        width: indicatorWidth,
-                                        child: const _LiquidSelectionPill(),
+                                // عندما تكون البقعة فوق مركز قسم تكون كبيرة وتحوي
+                                // الأيقونة والاسم. أثناء انتقالها بين قسمين تنكمش
+                                // مثل قطرة ماء ثم تتمدد من جديد عند الوصول.
+                                final nearest = _visualIndex.roundToDouble();
+                                final distance =
+                                    (_visualIndex - nearest).abs().clamp(0.0, .5);
+                                final travel = Curves.easeInOutCubic.transform(
+                                  (distance / .5).clamp(0.0, 1.0).toDouble(),
+                                );
+
+                                final fullWidth = itemWidth - 6;
+                                final blobWidth = lerpDouble(
+                                      fullWidth,
+                                      fullWidth * .58,
+                                      travel,
+                                    ) ??
+                                    fullWidth;
+                                final blobHeight = lerpDouble(
+                                      inner.maxHeight - 1,
+                                      (inner.maxHeight - 1) * .70,
+                                      travel,
+                                    ) ??
+                                    inner.maxHeight - 1;
+
+                                final centerX =
+                                    (count - 1 - _visualIndex) * itemWidth +
+                                        itemWidth / 2;
+                                final left = centerX - blobWidth / 2;
+                                final top = (inner.maxHeight - blobHeight) / 2;
+
+                                return Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    Positioned(
+                                      left: left,
+                                      top: top,
+                                      width: blobWidth,
+                                      height: blobHeight,
+                                      child: _LiquidSelectionBlob(
+                                        travel: travel,
+                                        dragging: _dragging,
                                       ),
-                                      Directionality(
-                                        textDirection: TextDirection.rtl,
-                                        child: Row(
-                                          children: List.generate(count, (i) {
-                                            final item = GlassNavigationBar._items[i];
-                                            final proximity =
-                                                (1.0 - (_visualIndex - i).abs())
-                                                    .clamp(0.0, 1.0)
-                                                    .toDouble();
-                                            return Expanded(
-                                              child: _GlassDockButton(
-                                                icon: item.icon,
-                                                label: item.label,
-                                                proximity: proximity,
-                                                onTap: () => _select(i),
-                                              ),
-                                            );
-                                          }),
-                                        ),
+                                    ),
+                                    Directionality(
+                                      textDirection: TextDirection.rtl,
+                                      child: Row(
+                                        children: List.generate(count, (i) {
+                                          final item =
+                                              GlassNavigationBar._items[i];
+                                          final proximity =
+                                              (1.0 - (_visualIndex - i).abs())
+                                                  .clamp(0.0, 1.0)
+                                                  .toDouble();
+                                          return Expanded(
+                                            child: _GlassDockButton(
+                                              icon: item.icon,
+                                              label: item.label,
+                                              proximity: proximity,
+                                              selected:
+                                                  !_dragging && widget.index == i,
+                                              semanticTap: () {
+                                                HapticFeedback.selectionClick();
+                                                _animateIndicatorTo(i.toDouble());
+                                                if (i != widget.index) {
+                                                  widget.onChanged(i);
+                                                }
+                                              },
+                                            ),
+                                          );
+                                        }),
                                       ),
-                                    ],
-                                  );
-                                },
-                              ),
+                                    ),
+                                  ],
+                                );
+                              },
                             ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -394,63 +574,55 @@ class _AndroidGlassDockState extends State<_AndroidGlassDock>
   }
 }
 
-class _LiquidSelectionPill extends StatelessWidget {
-  const _LiquidSelectionPill();
+class _LiquidSelectionBlob extends StatelessWidget {
+  const _LiquidSelectionBlob({
+    required this.travel,
+    required this.dragging,
+  });
+
+  final double travel;
+  final bool dragging;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(18),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            color: AppColors.redBright.withOpacity(.115),
-            border: Border.all(
-              color: AppColors.redBright.withOpacity(.32),
-              width: .8,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.redBright.withOpacity(.10),
-                blurRadius: 15,
-                spreadRadius: -5,
-              ),
-              BoxShadow(
-                color: Colors.white.withOpacity(.07),
-                blurRadius: 2,
-                offset: const Offset(0, -1),
-              ),
-            ],
+    final t = travel.clamp(0.0, 1.0).toDouble();
+    final radius = lerpDouble(18, 999, t) ?? 18;
+
+    return RepaintBoundary(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: lerpDouble(18, 24, t) ?? 18,
+            sigmaY: lerpDouble(18, 24, t) ?? 18,
           ),
-          child: Stack(
-            children: [
-              Positioned(
-                left: 12,
-                right: 12,
-                top: .7,
-                child: Container(
-                  height: .9,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(99),
-                    color: Colors.white.withOpacity(.17),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(radius),
+              gradient: RadialGradient(
+                center: const Alignment(0, -.08),
+                radius: 1.25,
+                colors: [
+                  AppColors.redBright.withOpacity(
+                    dragging ? .22 - (.06 * t) : .20 - (.05 * t),
                   ),
-                ),
+                  AppColors.red.withOpacity(.10 - (.025 * t)),
+                  AppColors.red.withOpacity(.055),
+                ],
+                stops: const [0.0, .58, 1.0],
               ),
-              Positioned(
-                left: 14,
-                right: 14,
-                bottom: 1.2,
-                child: Container(
-                  height: 1.2,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(99),
-                    color: AppColors.redBright.withOpacity(.50),
-                  ),
-                ),
+              border: Border.all(
+                color: AppColors.redBright.withOpacity(.30 - (.07 * t)),
+                width: .8,
               ),
-            ],
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.redBright.withOpacity(.13 - (.04 * t)),
+                  blurRadius: 17,
+                  spreadRadius: -5,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -458,74 +630,63 @@ class _LiquidSelectionPill extends StatelessWidget {
   }
 }
 
-class _GlassDockButton extends StatefulWidget {
+class _GlassDockButton extends StatelessWidget {
   const _GlassDockButton({
     required this.icon,
     required this.label,
     required this.proximity,
-    required this.onTap,
+    required this.selected,
+    required this.semanticTap,
   });
 
   final IconData icon;
   final String label;
   final double proximity;
-  final VoidCallback onTap;
-
-  @override
-  State<_GlassDockButton> createState() => _GlassDockButtonState();
-}
-
-class _GlassDockButtonState extends State<_GlassDockButton> {
-  bool _pressed = false;
+  final bool selected;
+  final VoidCallback semanticTap;
 
   @override
   Widget build(BuildContext context) {
-    final p = widget.proximity.clamp(0.0, 1.0).toDouble();
+    final p = proximity.clamp(0.0, 1.0).toDouble();
     final iconColor = Color.lerp(
       Colors.white.withOpacity(.55),
       AppColors.redBright,
       p,
     )!;
     final labelColor = Color.lerp(
-      Colors.white.withOpacity(.43),
+      Colors.white.withOpacity(.42),
       AppColors.redBright,
       p,
     )!;
 
     return Semantics(
       button: true,
-      selected: p > .85,
-      label: widget.label,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: (_) => setState(() => _pressed = true),
-        onTapCancel: () => setState(() => _pressed = false),
-        onTapUp: (_) => setState(() => _pressed = false),
-        onTap: widget.onTap,
-        child: AnimatedScale(
-          scale: _pressed ? .94 : (1 + (.025 * p)),
-          duration: const Duration(milliseconds: 110),
-          curve: Curves.easeOutCubic,
+      selected: selected,
+      label: label,
+      onTap: semanticTap,
+      child: IgnorePointer(
+        child: Transform.scale(
+          scale: 1 + (.022 * p),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                widget.icon,
-                size: 20.5 + (1.8 * p),
+                icon,
+                size: 20.5 + (1.9 * p),
                 color: iconColor,
               ),
               const SizedBox(height: 2.5),
               Opacity(
-                opacity: .68 + (.32 * p),
+                opacity: .67 + (.33 * p),
                 child: Text(
-                  widget.label,
+                  label,
                   maxLines: 1,
                   overflow: TextOverflow.fade,
                   softWrap: false,
                   style: TextStyle(
                     color: labelColor,
-                    fontSize: 9.5 + (.5 * p),
+                    fontSize: 9.4 + (.6 * p),
                     fontWeight: p > .55 ? FontWeight.w800 : FontWeight.w600,
                     height: 1,
                     letterSpacing: -.12,

@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'data/models/category.dart';
 import 'data/models/media_item.dart';
+import 'data/models/network_access_state.dart';
 import 'data/services/cinemana_api.dart';
 import 'data/stores/download_store.dart';
 import 'data/stores/app_settings_store.dart';
@@ -57,7 +58,15 @@ final homeFeedProvider = FutureProvider<HomeFeed>((ref) async {
 
 final categoriesProvider = FutureProvider<List<MediaCategory>>((ref) => ref.read(apiProvider).categories());
 
-final categoryPreviewProvider = FutureProvider.family<List<MediaItem>, String>((ref, categoryId) async {
-  final items = await ref.read(apiProvider).categoryVideos(categoryId, page: 1);
+final categoryPreviewProvider = FutureProvider.family<List<MediaItem>, ({String id, String title})>((ref, category) async {
+  final items = await ref.read(apiProvider).categoryVideos(
+    category.id,
+    categoryTitle: category.title,
+    page: 1,
+  );
   return items.take(6).toList();
+});
+
+final networkAccessProvider = FutureProvider<NetworkAccessState>((ref) async {
+  return ref.read(apiProvider).accessState();
 });

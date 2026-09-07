@@ -1,8 +1,9 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
-import '../core/theme/app_theme.dart';
 import '../core/network/image_cache.dart';
+import '../core/theme/app_theme.dart';
+import 'shimmer.dart';
 
 class CinematyNetworkImage extends StatelessWidget {
   const CinematyNetworkImage({
@@ -26,7 +27,8 @@ class CinematyNetworkImage extends StatelessWidget {
               imageUrl: url,
               cacheManager: CinematyImageCacheManager.instance,
               fit: fit,
-              fadeInDuration: const Duration(milliseconds: 180),
+              fadeInDuration: const Duration(milliseconds: 210),
+              fadeOutDuration: const Duration(milliseconds: 80),
               memCacheWidth: 900,
               placeholder: (_, __) => const _Placeholder(loading: true),
               errorWidget: (_, __, ___) => const _Placeholder(),
@@ -41,16 +43,17 @@ class _Placeholder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final box = Container(
       color: AppColors.surfaceHigh,
       alignment: Alignment.center,
       child: loading
-          ? SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white.withOpacity(.35)),
-            )
-          : Icon(Icons.movie_creation_outlined, color: Colors.white.withOpacity(.18), size: 32),
+          ? null
+          : Icon(
+              Icons.movie_creation_outlined,
+              color: Colors.white.withOpacity(.18),
+              size: 32,
+            ),
     );
+    return loading ? CinematyShimmer(child: box) : box;
   }
 }

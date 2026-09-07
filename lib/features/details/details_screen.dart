@@ -13,6 +13,7 @@ import '../../widgets/app_notice.dart';
 import '../../widgets/media_card.dart';
 import '../../widgets/network_image.dart';
 import '../../widgets/section_header.dart';
+import '../../widgets/shimmer.dart';
 import '../player/player_screen.dart';
 import 'actor_screen.dart';
 
@@ -195,8 +196,25 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
       );
       if (selected == null || !mounted) return;
       AppNotice.show(context, title: 'بدأ التنزيل', message: '${media.title} • ${selected.quality}', type: AppNoticeType.download);
-      await ref.read(downloadProvider).download(media, selected);
-      if (mounted) AppNotice.show(context, title: 'اكتمل التنزيل', message: media.title, type: AppNoticeType.success);
+      List<SubtitleSource> subtitles = const <SubtitleSource>[];
+      try {
+        subtitles = await ref.read(apiProvider).subtitles(media.id);
+      } catch (_) {}
+      await ref.read(downloadProvider).download(
+        media,
+        selected,
+        subtitles: subtitles,
+      );
+      if (mounted) {
+        AppNotice.show(
+          context,
+          title: 'اكتمل التنزيل',
+          message: subtitles.isEmpty
+              ? media.title
+              : '${media.title} • تم حفظ الترجمة أيضاً',
+          type: AppNoticeType.success,
+        );
+      }
     } catch (e) {
       if (mounted) AppNotice.show(context, title: 'فشل التنزيل', message: e.toString().replaceFirst('Bad state: ', ''), type: AppNoticeType.error);
     }
@@ -237,7 +255,11 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
               break;
             }
           }
-          await store.download(media, source);
+          List<SubtitleSource> subtitles = const <SubtitleSource>[];
+          try {
+            subtitles = await ref.read(apiProvider).subtitles(ep.id);
+          } catch (_) {}
+          await store.download(media, source, subtitles: subtitles);
         } catch (_) {}
       }
       if (mounted) AppNotice.show(context, title: 'اكتمل تنزيل الموسم', type: AppNoticeType.success);
@@ -496,7 +518,20 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
     return FutureBuilder<List<SeasonGroup>>(
       future: widget.future,
       builder: (_, snap) {
-        if (snap.connectionState == ConnectionState.waiting) return const SizedBox(height: 160, child: Center(child: CircularProgressIndicator()));
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.fromLTRB(18, 8, 18, 12),
+            child: Column(
+              children: [
+                SkeletonBox(height: 44, radius: 16),
+                SizedBox(height: 10),
+                SkeletonBox(height: 92, radius: 18),
+                SizedBox(height: 10),
+                SkeletonBox(height: 92, radius: 18),
+              ],
+            ),
+          );
+        }
         final seasons = snap.data ?? const <SeasonGroup>[];
         if (seasons.isEmpty) {
           return Padding(

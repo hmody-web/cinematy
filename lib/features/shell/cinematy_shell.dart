@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../widgets/glass_navigation_bar.dart';
 import '../discover/discover_screen.dart';
@@ -28,7 +29,14 @@ class _CinematyShellState extends State<CinematyShell> {
     return Scaffold(
       extendBody: true,
       body: IndexedStack(index: _index, children: _screens),
-      bottomNavigationBar: GlassNavigationBar(index: _index, onChanged: (value) => setState(() => _index = value)),
+      bottomNavigationBar: GlassNavigationBar(
+        index: _index,
+        onChanged: (value) {
+          if (value == _index) return;
+          HapticFeedback.selectionClick();
+          setState(() => _index = value);
+        },
+      ),
     );
   }
 }

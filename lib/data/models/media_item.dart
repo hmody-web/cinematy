@@ -61,6 +61,21 @@ class MediaItem {
     );
   }
 
+  Map<String, dynamic> toJson() => {
+    ...raw,
+    'nb': id,
+    'custom_ar_title': title,
+    'ar_content': description,
+    'poster': posterUrl,
+    'backdrop': backdropUrl,
+    'year': year,
+    'rating': rating,
+    'views': views,
+    'isSeries': isSeries,
+    if (season != null) 'season': season,
+    if (episode != null) 'episodeNummer': episode,
+  };
+
   MediaItem copyWith({String? backdropUrl}) => MediaItem(
     id: id,
     title: title,

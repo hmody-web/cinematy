@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../../providers.dart';
 import '../../data/stores/subtitle_settings_store.dart';
+import '../../widgets/cinematy_top_bar.dart';
 
 class SubtitleSettingsScreen extends ConsumerWidget {
   const SubtitleSettingsScreen({super.key});
@@ -17,12 +18,34 @@ class SubtitleSettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(subtitleSettingsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('إعدادات الترجمة'), actions: [TextButton(onPressed: s.reset, child: const Text('إعادة ضبط'))]),
+      appBar: CinematyTopBar(
+        section: 'إعدادات الترجمة',
+        showQuickActions: false,
+        onBack: () => Navigator.pop(context),
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(18, 14, 18, 40),
         children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'تخصيص الترجمة',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: s.reset,
+                icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                label: const Text('إعادة ضبط'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           Container(
-            height: 150,
+            height: 190,
             decoration: BoxDecoration(color: const Color(0xFF151515), borderRadius: BorderRadius.circular(24)),
             alignment: Alignment.center,
             child: _Preview(settings: s),
@@ -30,7 +53,7 @@ class SubtitleSettingsScreen extends ConsumerWidget {
           const SizedBox(height: 24),
           _FontSelector(settings: s),
           const SizedBox(height: 8),
-          _SliderTile(title: 'حجم الخط', value: s.fontSize, min: 14, max: 42, onChanged: s.setFontSize, valueLabel: '${s.fontSize.round()}'),
+          _SliderTile(title: 'حجم الخط', value: s.fontSize, min: 30, max: 200, onChanged: s.setFontSize, valueLabel: '${s.fontSize.round()}'),
           _ColorRow(title: 'لون النص', selected: s.textColor, colors: _colors, onChanged: s.setTextColor),
           _ColorRow(title: 'لون الحواف', selected: s.outlineColor, colors: _colors, onChanged: s.setOutlineColor),
           _SliderTile(title: 'سماكة الحواف', value: s.outlineWidth, min: 0, max: 5, onChanged: s.setOutlineWidth, valueLabel: s.outlineWidth.toStringAsFixed(1)),
@@ -57,8 +80,8 @@ class _Preview extends StatelessWidget {
       borderRadius: BorderRadius.circular(8),
     ),
     child: Stack(children: [
-      Text('هذه معاينة الترجمة العربية', textAlign: TextAlign.center, style: TextStyle(fontFamily: settings.fontFamily, fontSize: settings.fontSize, foreground: Paint()..style = PaintingStyle.stroke..strokeWidth = settings.outlineWidth * 2..color = settings.outlineColor.withOpacity(settings.outlineOpacity))),
-      Text('هذه معاينة الترجمة العربية', textAlign: TextAlign.center, style: TextStyle(fontFamily: settings.fontFamily, fontSize: settings.fontSize, color: settings.textColor)),
+      Text('هذه معاينة الترجمة العربية', textAlign: TextAlign.center, style: TextStyle(fontFamily: settings.fontFamily, fontSize: settings.fontSize.clamp(18.0, 80.0).toDouble(), foreground: Paint()..style = PaintingStyle.stroke..strokeWidth = settings.outlineWidth * 2..color = settings.outlineColor.withOpacity(settings.outlineOpacity))),
+      Text('هذه معاينة الترجمة العربية', textAlign: TextAlign.center, style: TextStyle(fontFamily: settings.fontFamily, fontSize: settings.fontSize.clamp(18.0, 80.0).toDouble(), color: settings.textColor)),
     ]),
   );
 }

@@ -6,9 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/media_item.dart';
 import '../../providers.dart';
+import '../../widgets/cinematy_top_bar.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/media_card.dart';
+import '../../widgets/shimmer.dart';
 import '../details/details_screen.dart';
+import '../library/library_screen.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -17,7 +20,8 @@ class SearchScreen extends ConsumerStatefulWidget {
   ConsumerState<SearchScreen> createState() => _SearchScreenState();
 }
 
-class _SearchScreenState extends ConsumerState<SearchScreen> with AutomaticKeepAliveClientMixin {
+class _SearchScreenState extends ConsumerState<SearchScreen>
+    with AutomaticKeepAliveClientMixin {
   final _controller = TextEditingController();
   Timer? _debounce;
   List<MediaItem> _allResults = const [];
@@ -39,7 +43,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> with AutomaticKeepA
 
   void _changed(String value) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 360), () => _search(value));
+    _debounce = Timer(const Duration(milliseconds: 320), () => _search(value));
     setState(() {});
   }
 
@@ -63,8 +67,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> with AutomaticKeepA
     });
 
     try {
-      // نطلب البحث العام أولاً ثم نفصل أفلام/مسلسلات محلياً؛ بهذه الطريقة
-      // لا تضيع نتائج إذا غيّر Cinemana طريقة تمييز movie/series في الـAPI.
       final data = await ref.read(apiProvider).searchAll(q);
       if (!mounted || serial != _requestSerial) return;
       _allResults = data;
@@ -102,14 +104,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen> with AutomaticKeepA
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final downloads = ref.watch(downloadProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('البحث'), centerTitle: false, backgroundColor: Colors.transparent),
+      appBar: CinematyTopBar(
+        section: 'البحث',
+        downloadsCount: downloads.items.length + downloads.activeItems.length,
+        onContinue: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+        ),
+        onDownloads: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+        ),
+      ),
       body: CustomScrollView(
         key: const PageStorageKey('search-scroll'),
         slivers: [
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
+              padding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
               child: TextField(
                 controller: _controller,
                 autofocus: false,
@@ -134,42 +148,123 @@ class _SearchScreenState extends ConsumerState<SearchScreen> with AutomaticKeepA
           ),
           SliverToBoxAdapter(
             child: SizedBox(
-              height: 46,
+              height: 48,
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 18),
                 scrollDirection: Axis.horizontal,
-                children: ['الكل', 'أفلام', 'مسلسلات'].map((f) => Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: ChoiceChip(
-                    selected: _filter == f,
-                    label: Text(f),
-                    selectedColor: AppColors.red.withOpacity(.35),
-                    onSelected: (_) => _changeFilter(f),
-                  ),
-                )).toList(),
+                children: ['الكل', 'أفلام', 'مسلسلات']
+                    .map(
+                      (f) => Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: ChoiceChip(
+                          selected: _filter == f,
+                          label: Text(f),
+                          selectedColor: AppColors.red.withOpacity(.35),
+                          onSelected: (_) => _changeFilter(f),
+                        ),
+                      ),
+                    )
+                    .toList(),
               ),
             ),
           ),
-          if (_loading)
-            const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(28), child: Center(child: CircularProgressIndicator())))
-          else if (_error != null)
-            SliverFillRemaining(hasScrollBody: false, child: EmptyState(title: 'تعذر البحث', message: 'حاول مرة أخرى بعد قليل.', onRetry: () => _search(_controller.text)))
+          if (_loading) ...[
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(18, 18, 18, 4),
+                child: Row(
+                  children: [
+                    SkeletonBox(width: 118, height: 14, radius: 7),
+                  ],
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 130),
+              sliver: SliverGrid.builder(
+                itemCount: 9,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: .52,
+                ),
+                itemBuilder: (_, __) => const SkeletonPosterCard(width: double.infinity),
+              ),
+            ),
+          ] else if (_error != null)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: EmptyState(
+                title: 'تعذر البحث',
+                message: 'حاول مرة أخرى بعد قليل.',
+                onRetry: () => _search(_controller.text),
+              ),
+            )
           else if (_controller.text.trim().length < 2)
-            const SliverFillRemaining(hasScrollBody: false, child: EmptyState(icon: Icons.search_rounded, title: 'شنو تحب تشوف اليوم؟', message: 'اكتب حرفين أو أكثر وسنبحث لك في كامل مكتبة سينمانا.'))
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: EmptyState(
+                icon: Icons.search_rounded,
+                title: 'شنو تحب تشوف اليوم؟',
+                message:
+                    'اكتب حرفين أو أكثر. البحث يجرب الاسم الكامل والتهجئات القريبة والنتائج المشابهة.',
+              ),
+            )
           else if (_results.isEmpty)
-            const SliverFillRemaining(hasScrollBody: false, child: EmptyState(title: 'ما لقينا نتائج', message: 'جرّب الاسم بالعربية أو الإنجليزية. البحث يجرب أيضاً التهجئات القريبة تلقائياً.'))
-          else
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: EmptyState(
+                title: 'ما لقينا نتائج',
+                message:
+                    'جرّب الاسم بالعربية أو الإنجليزية. البحث لا يعتمد على التطابق الحرفي فقط.',
+              ),
+            )
+          else ...[
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+                child: Row(
+                  children: [
+                    Text(
+                      '${_results.length} نتيجة',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'مرتبة حسب الأقرب للاسم الذي كتبته',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.42),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 130),
               sliver: SliverGrid.builder(
                 itemCount: _results.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 10, mainAxisSpacing: 16, childAspectRatio: .52),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: .52,
+                ),
                 itemBuilder: (_, i) {
                   final item = _results[i];
-                  return MediaPosterCard(item: item, width: double.infinity, onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => DetailsScreen(item: item))));
+                  return MediaPosterCard(
+                    item: item,
+                    width: double.infinity,
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => DetailsScreen(item: item)),
+                    ),
+                  );
                 },
               ),
             ),
+          ],
         ],
       ),
     );

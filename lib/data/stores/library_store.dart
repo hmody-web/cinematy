@@ -122,6 +122,6 @@ class LibraryStore extends ChangeNotifier {
     await prefs.setStringList(_favoritesKey, _favorites.toList());
     await prefs.setStringList(_watchLaterKey, _watchLater.toList());
     await prefs.setString(_progressKey, jsonEncode(_progress.map((k, v) => MapEntry(k, v.toJson()))));
-    await prefs.setString(_mediaKey, jsonEncode(_snapshots.map((k, v) => MapEntry(k, v.raw))));
+    await prefs.setString(_mediaKey, jsonEncode(_snapshots.map((k, v) => MapEntry(k, v.toJson()))));
   }
 }

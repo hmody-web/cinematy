@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/stores/app_settings_store.dart';
 import '../../providers.dart';
+import '../../widgets/cinematy_top_bar.dart';
 
 class AppSettingsScreen extends ConsumerWidget {
   const AppSettingsScreen({super.key});
@@ -12,7 +13,11 @@ class AppSettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(appSettingsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('إعدادات التطبيق')),
+      appBar: CinematyTopBar(
+        section: 'إعدادات التطبيق',
+        showQuickActions: false,
+        onBack: () => Navigator.pop(context),
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(18, 12, 18, 36),
         children: [

@@ -17,8 +17,8 @@ class SubtitleSettingsStore extends ChangeNotifier {
     SubtitleFontOption('NizarCocon', 'Nizar Cocon'),
   ];
 
-  double fontSize = 22;
-  String fontFamily = 'Monadi';
+  double fontSize = 50;
+  String fontFamily = 'ArabicUI';
   Color textColor = Colors.white;
   Color outlineColor = Colors.black;
   double outlineWidth = 2.0;
@@ -31,7 +31,7 @@ class SubtitleSettingsStore extends ChangeNotifier {
   Future<void> load() async {
     if (loaded) return;
     final p = await SharedPreferences.getInstance();
-    fontSize = p.getDouble('${_prefix}fontSize') ?? 22;
+    fontSize = (p.getDouble('${_prefix}fontSize') ?? 50).clamp(30.0, 200.0).toDouble();
     final savedFont = p.getString('${_prefix}fontFamily');
     if (savedFont != null && fonts.any((e) => e.family == savedFont)) fontFamily = savedFont;
     textColor = Color(p.getInt('${_prefix}textColor') ?? Colors.white.value);
@@ -69,8 +69,8 @@ class SubtitleSettingsStore extends ChangeNotifier {
   void setBackgroundOpacity(double v) { backgroundOpacity = v; notifyListeners(); _save(); }
 
   Future<void> reset() async {
-    fontSize = 22;
-    fontFamily = 'Monadi';
+    fontSize = 50;
+    fontFamily = 'ArabicUI';
     textColor = Colors.white;
     outlineColor = Colors.black;
     outlineWidth = 2;

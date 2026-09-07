@@ -53,11 +53,11 @@ class SubtitleSource {
   final String label;
 
   factory SubtitleSource.fromJson(Map<String, dynamic> json) {
-    final lang = JsonUtils.string(json, ['lang', 'language', 'display_name']);
+    final lang = JsonUtils.string(json, ['lang', 'language', 'display_name', 'name']);
     return SubtitleSource(
       url: normalizeMediaUrl(JsonUtils.string(json, ['file', 'url', 'path', 'arTranslationFilePath', 'enTranslationFilePath'])),
       language: lang.isEmpty ? 'العربية' : lang,
-      label: JsonUtils.string(json, ['display_name', 'title'], fallback: lang),
+      label: JsonUtils.string(json, ['display_name', 'title', 'name'], fallback: lang),
     );
   }
 }

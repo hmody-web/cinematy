@@ -10,6 +10,7 @@ import '../models/category.dart';
 import '../models/content_details.dart';
 import '../models/episode.dart';
 import '../models/media_item.dart';
+import '../models/network_access_state.dart';
 import '../models/video_source.dart';
 
 class CinemanaApi {
@@ -27,6 +28,8 @@ class CinemanaApi {
   ];
 
   final ApiDiskCache _cache = ApiDiskCache();
+  final Map<String, String> _categoryFingerprints = <String, String>{};
+  final Map<String, bool> _categoryFilterIgnoredCache = <String, bool>{};
 
   Dio _dioFor(String baseUrl) => Dio(
         BaseOptions(
@@ -270,44 +273,49 @@ class CinemanaApi {
     final wantsMovies = type != 'series';
     final wantsSeries = type != 'movie';
 
-    // SearchRequest في تطبيق Cinemana الأصلي يحمل هذه المفاتيح صراحة:
-    // page/currentPage + moviesDataRequest + seriesDataRequest + staffTitle/category/star.
-    // نرسلها كلها حتى يكون البحث مطابقاً أكثر للتطبيق الرسمي.
+    final normalizedType = type.trim().toLowerCase();
     Map<String, dynamic> base(String title) => <String, dynamic>{
-      'videoTitle': title,
-      'page': page,
-      'currentPage': page,
-      'moviesDataRequest': wantsMovies,
-      'seriesDataRequest': wantsSeries,
-      if (category.isNotEmpty) 'category': category,
-      if (star.isNotEmpty) ...{'staffTitle': star, 'star': star},
-      if (fromYear != null) 'fromYear': fromYear,
-      if (toYear != null) 'toYear': toYear,
-    };
+          'videoTitle': title,
+          'page': page,
+          'currentPage': page,
+          // AdvancedSearch القديم يعتمد type=movie/series صراحةً، بينما
+          // بعض نسخ الـ API الأحدث تفهم moviesDataRequest/seriesDataRequest.
+          // نرسل الاثنين معاً لزيادة التوافق وعدم اختفاء المسلسلات.
+          if (normalizedType == 'movie' || normalizedType == 'series')
+            'type': normalizedType,
+          'moviesDataRequest': wantsMovies,
+          'seriesDataRequest': wantsSeries,
+          if (category.isNotEmpty) 'category': category,
+          if (star.isNotEmpty) ...{'staffTitle': star, 'star': star},
+          if (fromYear != null) 'fromYear': fromYear,
+          if (toYear != null) 'toYear': toYear,
+        };
 
-    final variants = <String>[q];
-    // بعض فهارس Cinemana تحتوي تهجئات غير دقيقة مثل From -> Frome.
-    // لا نستبدل استعلام المستخدم؛ نجرب تهجئة إضافية فقط عند الحاجة.
-    if (q.isNotEmpty && RegExp(r'^[A-Za-z0-9 ._-]+$').hasMatch(q)) {
-      if (!q.toLowerCase().endsWith('e')) variants.add('${q}e');
-      if (q.toLowerCase().endsWith('e') && q.length > 2) variants.add(q.substring(0, q.length - 1));
-    }
-
+    final variants = _searchVariants(q);
     final collected = <MediaItem>[];
     Object? lastError;
 
     for (final title in variants) {
       final params = base(title);
-      for (final attempt in <Future<dynamic> Function()>[
-        () => _get(CinemanaRoutes.advancedSearch, query: params, ttl: const Duration(minutes: 2)),
+      final attempts = <Future<dynamic> Function()>[
+        () => _get(
+              CinemanaRoutes.advancedSearch,
+              query: params,
+              ttl: const Duration(minutes: 2),
+            ),
         () => _post(CinemanaRoutes.advancedSearch, data: params),
-        // بعض إصدارات الـAPI تتعامل مع 1/0 بدل true/false.
-        () => _get(CinemanaRoutes.advancedSearch, query: {
-          ...params,
-          'moviesDataRequest': wantsMovies ? 1 : 0,
-          'seriesDataRequest': wantsSeries ? 1 : 0,
-        }, ttl: const Duration(minutes: 2)),
-      ]) {
+        () => _get(
+              CinemanaRoutes.advancedSearch,
+              query: {
+                ...params,
+                'moviesDataRequest': wantsMovies ? 1 : 0,
+                'seriesDataRequest': wantsSeries ? 1 : 0,
+              },
+              ttl: const Duration(minutes: 2),
+            ),
+      ];
+
+      for (final attempt in attempts) {
         try {
           final raw = await attempt();
           final items = _mediaList(raw);
@@ -317,6 +325,29 @@ class CinemanaApi {
           lastError = error;
         }
       }
+
+      // لا نوسّع الشبكة بلا داعٍ إذا حصلنا على كمية جيدة من أول استعلام.
+      if (collected.length >= 24) break;
+    }
+
+    // بعض نسخ API تفصل البحث بالممثل عن عنوان الفيديو.
+    if (q.isNotEmpty && collected.length < 8 && star.isEmpty) {
+      try {
+        final raw = await _get(
+          CinemanaRoutes.advancedSearch,
+          query: {
+            'staffTitle': q,
+            'page': page,
+            'currentPage': page,
+            if (normalizedType == 'movie' || normalizedType == 'series')
+              'type': normalizedType,
+            'moviesDataRequest': wantsMovies,
+            'seriesDataRequest': wantsSeries,
+          },
+          ttl: const Duration(minutes: 2),
+        );
+        collected.addAll(_mediaList(raw));
+      } catch (_) {}
     }
 
     var result = _unique(collected);
@@ -330,82 +361,338 @@ class CinemanaApi {
   }
 
   Future<List<MediaItem>> searchAll(String query, {int page = 1}) async {
-    // نجمع الطلب العام + طلب الأفلام + طلب المسلسلات دائماً. بعض نسخ Cinemana
-    // ترجع نوعاً واحداً فقط في البحث العام، وهذا كان يخفي مسلسلات معروفة.
-    final results = await Future.wait<List<MediaItem>>([
-      search(query, page: page),
-      search(query, page: page, type: 'movie'),
-      search(query, page: page, type: 'series'),
-    ]);
-    return _rankSearch(_unique([...results[0], ...results[1], ...results[2]]), query);
-  }
+    final q = query.trim();
+    if (q.isEmpty) return const <MediaItem>[];
 
-  Future<List<MediaItem>> categoryVideos(String categoryId, {int page = 1}) async {
     final collected = <MediaItem>[];
-    for (final params in <Map<String, dynamic>>[
-      {
-        'category': categoryId,
-        'page': page,
-        'currentPage': page,
-        'moviesDataRequest': true,
-        'seriesDataRequest': true,
-      },
-      {'categoryID': categoryId, 'page': page, 'currentPage': page},
-      {'categoryNb': categoryId, 'page': page, 'currentPage': page},
-    ]) {
-      for (final attempt in <Future<dynamic> Function()>[
-        () => _get(CinemanaRoutes.advancedSearch, query: params, ttl: const Duration(minutes: 5)),
-        () => _post(CinemanaRoutes.advancedSearch, data: params),
-      ]) {
-        try {
-          final raw = await attempt();
-          final items = _mediaList(raw);
-          collected.addAll(items);
-          if (items.isNotEmpty) break;
-        } catch (_) {}
-      }
-      if (collected.isNotEmpty) break;
+    try {
+      collected.addAll(await search(q, page: page));
+    } catch (_) {}
+
+    if (collected.length < 12) {
+      final typed = await Future.wait<List<MediaItem>>([
+        search(q, page: page, type: 'movie').catchError((_) => <MediaItem>[]),
+        search(q, page: page, type: 'series').catchError((_) => <MediaItem>[]),
+      ]);
+      collected.addAll(typed.expand((e) => e));
     }
-    return _unique(collected);
-  }
 
-  Future<List<MediaItem>> personWorks(Person person) async {
-    final collected = <MediaItem>[];
-    if (person.id.isNotEmpty) {
+    // fallback مهم لمسلسلات مثل From / Manifest / Lucifer: نفحص فهرس المجموعات
+    // ونطلب البحث داخل المجموعات عندما تكون نتائج AdvancedSearch ناقصة.
+    if (collected.length < 10) {
       try {
-        final raw = await _get(CinemanaRoutes.staff(person.id), ttl: const Duration(hours: 1));
-        collected.addAll(_mediaList(raw));
-        for (final map in _flattenMaps(raw)) {
-          final item = MediaItem.fromJson(map);
-          if (item.id.isNotEmpty && (map.containsKey('kind') || map.containsKey('videoUploadDate'))) {
-            collected.add(item);
-          }
+        final sections = await homeSections();
+        final local = sections.expand((e) => e.items).where(
+              (item) => _searchScore(item, q) >= 250,
+            );
+        collected.addAll(local);
+
+        if (collected.length < 10) {
+          final requests = sections.take(10).map((section) async {
+            try {
+              return await groupVideos(section.id, page: page, query: q);
+            } catch (_) {
+              return <MediaItem>[];
+            }
+          });
+          final grouped = await Future.wait(requests);
+          collected.addAll(grouped.expand((e) => e));
         }
       } catch (_) {}
     }
-    for (final name in <String>[person.name, if (person.id.isNotEmpty) person.id]) {
-      if (name.trim().isEmpty) continue;
-      try {
-        collected.addAll(await search('', star: name));
-      } catch (_) {}
+
+    return _rankSearch(_unique(collected), q);
+  }
+
+  Future<List<MediaItem>> categoryVideos(
+    String categoryId, {
+    String categoryTitle = '',
+    int page = 1,
+  }) async {
+    final key = '$categoryId|$categoryTitle|$page';
+    final id = categoryId.trim();
+    final title = categoryTitle.trim();
+    final filters = <({String field, String value})>[
+      if (id.isNotEmpty) (field: 'category', value: id),
+      if (title.isNotEmpty) (field: 'category', value: title),
+      if (id.isNotEmpty) (field: 'categoryID', value: id),
+      if (id.isNotEmpty) (field: 'categoryId', value: id),
+      if (id.isNotEmpty) (field: 'category_id', value: id),
+      if (id.isNotEmpty) (field: 'categoryNb', value: id),
+      if (id.isNotEmpty) (field: 'catNb', value: id),
+    ];
+
+    final accepted = <MediaItem>[];
+
+    // AdvancedSearch القديم يعتمد type=movie/series. لذلك نبحث في النوعين
+    // بشكل منفصل ثم ندمج النتائج، بدلاً من طلب عام قد يتجاهل التصنيف.
+    for (final mediaType in const <String>['movie', 'series']) {
+      var foundForType = false;
+      for (final filter in filters) {
+        final params = <String, dynamic>{
+          filter.field: filter.value,
+          'type': mediaType,
+          'page': page,
+          'currentPage': page,
+          'moviesDataRequest': mediaType == 'movie',
+          'seriesDataRequest': mediaType == 'series',
+        };
+
+        for (final request in <Future<dynamic> Function()>[
+          () => _get(
+                CinemanaRoutes.advancedSearch,
+                query: params,
+                ttl: const Duration(minutes: 5),
+              ),
+          () => _post(CinemanaRoutes.advancedSearch, data: params),
+        ]) {
+          try {
+            final raw = await request();
+            final items = _unique(_mediaList(raw));
+            if (items.isEmpty) continue;
+
+            final strict = items
+                .where(
+                  (item) =>
+                      _itemMatchesCategory(item, categoryId, categoryTitle),
+                )
+                .toList();
+
+            // إذا العناصر نفسها تحمل category metadata نثق بالفلترة المحلية.
+            if (strict.isNotEmpty) {
+              accepted.addAll(strict);
+              foundForType = true;
+              break;
+            }
+
+            // بعض استجابات Cinemana لا تعيد genre/category داخل العنصر نفسه.
+            // نتحقق عندها بطلب تحكم مستحيل: إذا أعاد نفس النتائج فهذا يعني
+            // أن الخادم تجاهل معامل التصنيف، فلا نعرض نفس الأفلام بكل الأقسام.
+            final ignored = await _categoryFilterWasIgnored(
+              items: items,
+              field: filter.field,
+              type: mediaType,
+              page: page,
+            );
+            if (ignored) continue;
+
+            if (_looksLikeDuplicatedCategoryResult(
+              '$key|$mediaType',
+              items,
+            )) {
+              continue;
+            }
+
+            accepted.addAll(items);
+            foundForType = true;
+            break;
+          } catch (_) {}
+        }
+        if (foundForType) break;
+      }
     }
-    return _unique(collected);
+
+    if (accepted.isNotEmpty) return _unique(accepted);
+
+    // fallback من مجموعات Cinemana نفسها عندما يتطابق اسم المجموعة مع التصنيف.
+    try {
+      final sections = await homeSections();
+      final wanted = _normalizeSearch(categoryTitle);
+      final matching = sections.where((section) {
+        final sectionTitle = _normalizeSearch(section.title);
+        return wanted.isNotEmpty &&
+            (sectionTitle == wanted ||
+                sectionTitle.contains(wanted) ||
+                wanted.contains(sectionTitle));
+      }).expand((section) => section.items).toList();
+      if (matching.isNotEmpty) return _unique(matching);
+    } catch (_) {}
+
+    return const <MediaItem>[];
+  }
+
+  Future<bool> _categoryFilterWasIgnored({
+    required List<MediaItem> items,
+    required String field,
+    required String type,
+    required int page,
+  }) async {
+    if (items.length < 4) return false;
+    final supportKey = '$field|$type';
+    final cached = _categoryFilterIgnoredCache[supportKey];
+    if (cached != null) return cached;
+
+    try {
+      final raw = await _get(
+        CinemanaRoutes.advancedSearch,
+        query: <String, dynamic>{
+          field: '__cinematy_category_that_does_not_exist__',
+          'type': type,
+          'page': page,
+          'currentPage': page,
+          'moviesDataRequest': type == 'movie',
+          'seriesDataRequest': type == 'series',
+        },
+        ttl: const Duration(minutes: 30),
+      );
+      final control = _unique(_mediaList(raw));
+      final ignored = control.length >= 4 &&
+          _mediaFingerprint(items) == _mediaFingerprint(control);
+      _categoryFilterIgnoredCache[supportKey] = ignored;
+      return ignored;
+    } catch (_) {
+      // لا نحفظ نتيجة الخطأ حتى يمكن إعادة التحقق في الطلب اللاحق.
+      return false;
+    }
+  }
+
+  String _mediaFingerprint(List<MediaItem> items) {
+    final ids = items.take(12).map((e) => e.id).where((e) => e.isNotEmpty).toList()
+      ..sort();
+    return ids.join('|');
+  }
+
+  List<String> _searchVariants(String query) {
+    final q = query.trim();
+    if (q.isEmpty) return const <String>[''];
+    final values = <String>{q};
+    final normalizedSpaces = q.replaceAll(RegExp(r'\s+'), ' ').trim();
+    values.add(normalizedSpaces);
+
+    if (RegExp(r'^[A-Za-z0-9 ._\-]+$').hasMatch(q)) {
+      final compact = q.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+      if (compact.length >= 4) values.add(compact);
+      if (q.length >= 6) values.add(q.substring(0, q.length - 1));
+      if (q.length >= 5) values.add(q.substring(0, 4));
+      if (!q.toLowerCase().endsWith('e')) values.add('${q}e');
+      if (q.toLowerCase().endsWith('e') && q.length > 2) {
+        values.add(q.substring(0, q.length - 1));
+      }
+    }
+    return values.take(5).toList();
   }
 
   List<MediaItem> _rankSearch(List<MediaItem> items, String query) {
-    final q = query.trim().toLowerCase();
+    final q = query.trim();
     if (q.isEmpty) return items;
-    int score(MediaItem item) {
-      final title = item.title.toLowerCase();
-      final en = (item.raw['en_title'] ?? '').toString().toLowerCase();
-      final other = (item.raw['other_title'] ?? '').toString().toLowerCase();
-      if (title == q || en == q || other == q) return 100;
-      if (title.startsWith(q) || en.startsWith(q) || other.startsWith(q)) return 70;
-      if (title.contains(q) || en.contains(q) || other.contains(q)) return 50;
-      return 0;
+    final scored = items
+        .map((item) => (item: item, score: _searchScore(item, q)))
+        .where((entry) => entry.score >= 180)
+        .toList()
+      ..sort((a, b) => b.score.compareTo(a.score));
+    return scored.map((e) => e.item).toList();
+  }
+
+  int _searchScore(MediaItem item, String query) {
+    final q = _normalizeSearch(query);
+    if (q.isEmpty) return 1;
+    final candidates = <String>{
+      _normalizeSearch(item.title),
+      _normalizeSearch((item.raw['en_title'] ?? '').toString()),
+      _normalizeSearch((item.raw['other_title'] ?? '').toString()),
+      _normalizeSearch((item.raw['custom_ar_title'] ?? '').toString()),
+      _normalizeSearch((item.raw['ar_title'] ?? '').toString()),
+    }..removeWhere((e) => e.isEmpty);
+
+    var best = 0;
+    for (final title in candidates) {
+      if (title == q) best = best < 1000 ? 1000 : best;
+      if (title.startsWith(q) || q.startsWith(title)) {
+        best = best < 820 ? 820 : best;
+      }
+      if (title.contains(q) || q.contains(title)) {
+        best = best < 680 ? 680 : best;
+      }
+
+      final qTokens = q.split(' ').where((e) => e.isNotEmpty).toSet();
+      final tTokens = title.split(' ').where((e) => e.isNotEmpty).toSet();
+      if (qTokens.isNotEmpty && tTokens.isNotEmpty) {
+        final overlap = qTokens.intersection(tTokens).length / qTokens.length;
+        final tokenScore = (overlap * 560).round();
+        if (tokenScore > best) best = tokenScore;
+      }
+
+      final maxLen = q.length > title.length ? q.length : title.length;
+      if (maxLen > 0 && maxLen <= 42) {
+        final distance = _levenshtein(q, title);
+        final similarity = 1 - (distance / maxLen);
+        final fuzzy = (similarity * 520).round();
+        if (fuzzy > best) best = fuzzy;
+      }
     }
-    final copy = [...items]..sort((a, b) => score(b).compareTo(score(a)));
-    return copy;
+    return best;
+  }
+
+  String _normalizeSearch(String value) => value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[أإآ]'), 'ا')
+      .replaceAll('ى', 'ي')
+      .replaceAll('ة', 'ه')
+      .replaceAll(RegExp(r'[^a-z0-9\u0600-\u06FF]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  int _levenshtein(String a, String b) {
+    if (a == b) return 0;
+    if (a.isEmpty) return b.length;
+    if (b.isEmpty) return a.length;
+    var previous = List<int>.generate(b.length + 1, (i) => i);
+    for (var i = 0; i < a.length; i++) {
+      final current = List<int>.filled(b.length + 1, 0);
+      current[0] = i + 1;
+      for (var j = 0; j < b.length; j++) {
+        final cost = a.codeUnitAt(i) == b.codeUnitAt(j) ? 0 : 1;
+        final insert = current[j] + 1;
+        final delete = previous[j + 1] + 1;
+        final replace = previous[j] + cost;
+        current[j + 1] = [insert, delete, replace].reduce(
+          (x, y) => x < y ? x : y,
+        );
+      }
+      previous = current;
+    }
+    return previous.last;
+  }
+
+  bool _itemMatchesCategory(
+    MediaItem item,
+    String categoryId,
+    String categoryTitle,
+  ) {
+    final id = categoryId.trim().toLowerCase();
+    final title = _normalizeSearch(categoryTitle);
+    final rawValues = <String>[];
+    for (final key in const <String>[
+      'catNb',
+      'categoryNb',
+      'categoryID',
+      'categoryId',
+      'category',
+      'categories',
+      'genre',
+      'genres',
+    ]) {
+      final value = item.raw[key];
+      if (value != null) rawValues.add(value.toString());
+    }
+    if (rawValues.isEmpty) return false;
+    final joined = rawValues.join(' ').toLowerCase();
+    if (id.isNotEmpty && joined.contains(id)) return true;
+    if (title.isNotEmpty && _normalizeSearch(joined).contains(title)) return true;
+    return false;
+  }
+
+  bool _looksLikeDuplicatedCategoryResult(
+    String key,
+    List<MediaItem> items,
+  ) {
+    if (items.length < 4) return false;
+    final fingerprint = _mediaFingerprint(items);
+    for (final entry in _categoryFingerprints.entries) {
+      if (entry.key != key && entry.value == fingerprint) return true;
+    }
+    _categoryFingerprints[key] = fingerprint;
+    return false;
   }
 
   Future<ContentDetails> details(String id, {bool refresh = false}) async {
@@ -486,27 +773,127 @@ class CinemanaApi {
   }
 
   Future<List<SubtitleSource>> subtitles(String id) async {
-    final raw = await _get(
-      CinemanaRoutes.translations(id),
-      ttl: const Duration(minutes: 20),
-    );
+    final collected = <SubtitleSource>[];
+
+    // المسار المخصص للترجمة هو الأسرع عندما يكون متوفراً.
+    try {
+      final raw = await _get(
+        CinemanaRoutes.translations(id),
+        ttl: const Duration(minutes: 20),
+      );
+      collected.addAll(_subtitleList(raw));
+    } catch (_) {}
+
+    // Cinemana القديمة تضع translations داخل allVideoInfo نفسه
+    // (name + file). هذا fallback مهم جداً للتنزيلات وللحلقات.
+    if (collected.isEmpty) {
+      try {
+        final raw = await _get(
+          CinemanaRoutes.videoInfo(id),
+          ttl: AppConfig.detailsCacheTtl,
+        );
+        collected.addAll(_subtitleList(raw));
+      } catch (_) {}
+    }
+
+    final seen = <String>{};
+    return collected
+        .where((e) => e.url.isNotEmpty && seen.add(e.url))
+        .toList();
+  }
+
+  List<SubtitleSource> _subtitleList(dynamic raw) {
     final result = <SubtitleSource>[];
     for (final map in _flattenMaps(raw)) {
-      final ar = (map['arTranslationFilePath'] ?? map['arTranslationFile'] ?? '').toString().trim();
-      final en = (map['enTranslationFilePath'] ?? map['enTranslationFile'] ?? '').toString().trim();
+      final ar = (map['arTranslationFilePath'] ??
+              map['arTranslationFile'] ??
+              '')
+          .toString()
+          .trim();
+      final en = (map['enTranslationFilePath'] ??
+              map['enTranslationFile'] ??
+              '')
+          .toString()
+          .trim();
       if (ar.isNotEmpty) {
-        result.add(SubtitleSource(url: normalizeMediaUrl(ar), language: 'ar', label: 'العربية'));
+        result.add(
+          SubtitleSource(
+            url: normalizeMediaUrl(ar),
+            language: 'ar',
+            label: 'العربية',
+          ),
+        );
       }
       if (en.isNotEmpty) {
-        result.add(SubtitleSource(url: normalizeMediaUrl(en), language: 'en', label: 'الإنجليزية'));
+        result.add(
+          SubtitleSource(
+            url: normalizeMediaUrl(en),
+            language: 'en',
+            label: 'الإنجليزية',
+          ),
+        );
       }
-      final generic = SubtitleSource.fromJson(map);
-      if (generic.url.isNotEmpty && generic.url != normalizeMediaUrl(ar) && generic.url != normalizeMediaUrl(en)) {
-        result.add(generic);
+
+      // الشكل القديم: {name: "Arabic", file: "...srt"}
+      // والشكل العام: {url/path/file, lang/language/display_name}.
+      final looksLikeSubtitle =
+          map.containsKey('arTranslationFilePath') ||
+              map.containsKey('enTranslationFilePath') ||
+              ((map.containsKey('file') ||
+                      map.containsKey('url') ||
+                      map.containsKey('path')) &&
+                  (map.containsKey('name') ||
+                      map.containsKey('lang') ||
+                      map.containsKey('language') ||
+                      map.containsKey('display_name')));
+      if (looksLikeSubtitle) {
+        final generic = SubtitleSource.fromJson(map);
+        if (generic.url.isNotEmpty &&
+            generic.url != normalizeMediaUrl(ar) &&
+            generic.url != normalizeMediaUrl(en)) {
+          result.add(generic);
+        }
       }
     }
-    final seen = <String>{};
-    return result.where((e) => e.url.isNotEmpty && seen.add(e.url)).toList();
+    return result;
+  }
+
+  Future<List<MediaItem>> personWorks(Person person) async {
+    final collected = <MediaItem>[];
+
+    if (person.id.isNotEmpty) {
+      try {
+        final raw = await _get(
+          CinemanaRoutes.staff(person.id),
+          ttl: const Duration(hours: 1),
+        );
+        collected.addAll(_mediaList(raw));
+
+        // بعض استجابات staff تكون متداخلة ولا تمر مباشرة عبر _mediaList.
+        for (final map in _flattenMaps(raw)) {
+          final item = MediaItem.fromJson(map);
+          if (item.id.isNotEmpty &&
+              (map.containsKey('kind') ||
+                  map.containsKey('videoUploadDate') ||
+                  map.containsKey('videoTitle') ||
+                  map.containsKey('title'))) {
+            collected.add(item);
+          }
+        }
+      } catch (_) {
+        // لا نوقف صفحة الممثل إذا كان endpoint الخاص به غير متاح.
+      }
+    }
+
+    // fallback: البحث باسم الممثل يعطي الأعمال حتى عندما staff يرجع الملف
+    // الشخصي فقط ولا يعيد قائمة الأعمال.
+    if (person.name.trim().isNotEmpty) {
+      try {
+        collected.addAll(await search('', star: person.name.trim()));
+      } catch (_) {}
+    }
+
+    return _unique(collected);
   }
 
   Future<Person?> person(String id) async {
@@ -543,6 +930,119 @@ class CinemanaApi {
       debugPrint('[Cinematy API] recommendations unavailable: ${_shortError(lastError)}');
     }
     return const [];
+  }
+
+  Future<NetworkAccessState> accessState() async {
+    // لا نعتمد على /api/info/userInfo وحده لتحديد شبكة إيرثلنك.
+    // هذا المسار قد يرجع 403 في بعض إعدادات سينمانا حتى والجهاز داخل الشبكة.
+    // بدلاً من ذلك نفحص نفس مسارات المحتوى التي يعتمد عليها التطبيق فعلياً.
+    final probes = <String>[
+      CinemanaRoutes.videoGroups(AppConfig.language),
+      CinemanaRoutes.banner(0),
+      CinemanaRoutes.categories,
+    ];
+
+    Object? lastError;
+    var explicitDenied = 0;
+    var reachedCinemana = 0;
+
+    for (final base in _contentBases) {
+      final dio = Dio(
+        BaseOptions(
+          baseUrl: base,
+          connectTimeout: const Duration(seconds: 6),
+          receiveTimeout: const Duration(seconds: 6),
+          sendTimeout: const Duration(seconds: 6),
+          responseType: ResponseType.plain,
+          validateStatus: (status) => status != null && status < 500,
+          headers: const {
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'ar-IQ,ar;q=0.9,en;q=0.4',
+            'User-Agent': 'Cinematy/1.0 (Flutter; Android/iOS)',
+            'Cache-Control': 'no-cache',
+          },
+        ),
+      );
+
+      for (final path in probes) {
+        try {
+          final response = await dio.get<dynamic>(path);
+          final status = response.statusCode ?? 0;
+
+          if (status >= 200 && status < 400) {
+            return const NetworkAccessState(NetworkAccessKind.online);
+          }
+
+          // وصلنا فعلياً إلى خادم سينمانا، لكن الخادم رفض الوصول صراحةً.
+          if (status == 401 || status == 403 || status == 451) {
+            explicitDenied++;
+            reachedCinemana++;
+            continue;
+          }
+
+          // 404/405 مثلاً تعني أن الدومين نفسه قابل للوصول؛
+          // لا نعتبرها دليلاً على أن المستخدم خارج إيرثلنك.
+          if (status >= 400 && status < 500) {
+            reachedCinemana++;
+          }
+        } on DioException catch (error) {
+          lastError = error;
+          final code = error.response?.statusCode;
+          if (code == 401 || code == 403 || code == 451) {
+            explicitDenied++;
+            reachedCinemana++;
+          }
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    }
+
+    // إذا لا يوجد إنترنت أصلاً، نعرض وضع عدم الاتصال.
+    final internet = await _probeInternet();
+    if (!internet) {
+      return NetworkAccessState(
+        NetworkAccessKind.offline,
+        details: _shortError(lastError),
+      );
+    }
+
+    // نعرض "خارج إيرثلنك" فقط عندما نحصل على رفض صريح من خوادم
+    // سينمانا الفعلية. هذا يمنع ظهور الرسالة خطأ بسبب userInfo أو عطل مؤقت.
+    if (explicitDenied > 0 && reachedCinemana > 0) {
+      return NetworkAccessState(
+        NetworkAccessKind.outsideEarthlink,
+        details: 'Cinemana access denied ($explicitDenied)',
+      );
+    }
+
+    // الإنترنت يعمل لكن فحص سينمانا كان غير حاسم (timeout / عطل بالخادم).
+    // لا نتهم الشبكة بأنها خارج إيرثلنك؛ نعاملها مؤقتاً كعدم توفر خدمة.
+    return NetworkAccessState(
+      NetworkAccessKind.offline,
+      details: _shortError(lastError),
+    );
+  }
+
+  Future<bool> _probeInternet() async {
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 4),
+        receiveTimeout: const Duration(seconds: 4),
+        validateStatus: (status) => status != null && status < 500,
+      ),
+    );
+    for (final url in const <String>[
+      'https://www.gstatic.com/generate_204',
+      'https://www.google.com/generate_204',
+      'https://www.cloudflare.com/cdn-cgi/trace',
+    ]) {
+      try {
+        final response = await dio.get<dynamic>(url);
+        if ((response.statusCode ?? 600) < 500) return true;
+      } catch (_) {}
+    }
+    return false;
   }
 
   Future<void> clearApiCache() => _cache.clear();

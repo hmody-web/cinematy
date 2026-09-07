@@ -14,6 +14,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
     this.downloadsCount = 0,
     this.showQuickActions = true,
     this.onBack,
+    this.brandGlassProgress = 0,
+    this.brandOpacity = 1,
   });
 
   final String? section;
@@ -22,6 +24,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
   final int downloadsCount;
   final bool showQuickActions;
   final VoidCallback? onBack;
+  final double brandGlassProgress;
+  final double brandOpacity;
 
   @override
   Size get preferredSize => const Size.fromHeight(74);
@@ -53,6 +57,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
           downloadsCount: downloadsCount,
           showQuickActions: showQuickActions,
           onBack: onBack,
+          brandGlassProgress: brandGlassProgress,
+          brandOpacity: brandOpacity,
         ),
       );
 }
@@ -66,6 +72,8 @@ class CinematyTopBarContent extends StatelessWidget {
     this.downloadsCount = 0,
     this.showQuickActions = true,
     this.onBack,
+    this.brandGlassProgress = 0,
+    this.brandOpacity = 1,
   });
 
   final String? section;
@@ -74,6 +82,8 @@ class CinematyTopBarContent extends StatelessWidget {
   final int downloadsCount;
   final bool showQuickActions;
   final VoidCallback? onBack;
+  final double brandGlassProgress;
+  final double brandOpacity;
 
   @override
   Widget build(BuildContext context) {
@@ -96,32 +106,38 @@ class CinematyTopBarContent extends StatelessWidget {
             ),
           ],
           const Spacer(),
-          Directionality(
-            textDirection: TextDirection.rtl,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const BrandLogo(size: 38),
-                if (section != null && section!.trim().isNotEmpty) ...[
-                  const SizedBox(width: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(.045),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.white.withOpacity(.06)),
-                    ),
-                    child: Text(
-                      section!,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.72),
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w900,
+          Opacity(
+            opacity: brandOpacity.clamp(0.0, 1.0),
+            child: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _BrandGlass(
+                    progress: brandGlassProgress.clamp(0.0, 1.0),
+                    child: const BrandLogo(size: 38),
+                  ),
+                  if (section != null && section!.trim().isNotEmpty) ...[
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(.045),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: Colors.white.withOpacity(.06)),
+                      ),
+                      child: Text(
+                        section!,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.72),
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
           if (onBack != null) ...[
@@ -134,6 +150,52 @@ class CinematyTopBarContent extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+
+class _BrandGlass extends StatelessWidget {
+  const _BrandGlass({required this.progress, required this.child});
+
+  final double progress;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    // Lightweight logo background: no BackdropFilter and no white glass
+    // highlight. Once the threshold is crossed it becomes a stable dark
+    // surface with a very subtle Cinematy-red tint.
+    final visible = progress >= .5;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.symmetric(
+        horizontal: visible ? 12 : 4,
+        vertical: visible ? 6 : 2,
+      ),
+      decoration: BoxDecoration(
+        gradient: visible
+            ? LinearGradient(
+                begin: Alignment.bottomRight,
+                end: Alignment.topLeft,
+                colors: [
+                  const Color(0xFF080808).withOpacity(.96),
+                  const Color(0xFF0D0505).withOpacity(.94),
+                  const Color(0xFF120606).withOpacity(.90),
+                ],
+              )
+            : null,
+        color: visible ? null : Colors.transparent,
+        borderRadius: BorderRadius.circular(visible ? 18 : 13),
+        border: Border.all(
+          color: visible
+              ? const Color(0xFF2A1010).withOpacity(.42)
+              : Colors.transparent,
+          width: .8,
+        ),
+      ),
+      child: child,
     );
   }
 }

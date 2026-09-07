@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/app_theme.dart';
@@ -67,10 +68,20 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
           final details = snapshot.data;
           final media = details?.media.id.isNotEmpty == true ? details!.media : widget.item;
           final watchLater = library.isWatchLater(media.id);
+          final favorite = library.isFavorite(media.id);
           final downloaded = downloads.isDownloaded(media.id);
           final downloading = downloads.isDownloading(media.id);
           final downloadProgress = downloads.progressOf(media.id);
-          final backdrop = media.posterUrl.isNotEmpty ? media.posterUrl : media.backdropUrl;
+          // Cinemana's native app uses the full imgObjURL image for immersive
+          // artwork. Prefer the full backdrop from videoInfo and only fall
+          // back to thumbnails if no full image exists.
+          final backdrop = media.backdropUrl.isNotEmpty
+              ? media.backdropUrl
+              : widget.item.backdropUrl.isNotEmpty
+                  ? widget.item.backdropUrl
+                  : media.posterUrl.isNotEmpty
+                      ? media.posterUrl
+                      : widget.item.posterUrl;
 
           return CustomScrollView(
             physics: const BouncingScrollPhysics(),
@@ -81,6 +92,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                   details: details,
                   backdrop: backdrop,
                   watchLater: watchLater,
+                  favorite: favorite,
                   downloaded: downloaded,
                   downloading: downloading,
                   downloadProgress: downloadProgress,
@@ -92,6 +104,14 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                     AppNotice.show(
                       context,
                       title: watchLater ? 'تمت الإزالة من المشاهدة لاحقاً' : 'تمت الإضافة للمشاهدة لاحقاً',
+                      type: AppNoticeType.success,
+                    );
+                  },
+                  onFavorite: () {
+                    ref.read(libraryProvider).toggleFavorite(media);
+                    AppNotice.show(
+                      context,
+                      title: favorite ? 'تمت الإزالة من المحفوظات' : 'تم الحفظ في المفضلة',
                       type: AppNoticeType.success,
                     );
                   },
@@ -292,6 +312,7 @@ class _ImmersiveHero extends StatelessWidget {
     required this.details,
     required this.backdrop,
     required this.watchLater,
+    required this.favorite,
     required this.downloaded,
     required this.downloading,
     required this.downloadProgress,
@@ -299,14 +320,15 @@ class _ImmersiveHero extends StatelessWidget {
     required this.onPlay,
     required this.onDownload,
     required this.onWatchLater,
+    required this.onFavorite,
   });
 
   final MediaItem media;
   final ContentDetails? details;
   final String backdrop;
-  final bool watchLater, downloaded, downloading;
+  final bool watchLater, favorite, downloaded, downloading;
   final double downloadProgress;
-  final VoidCallback onBack, onPlay, onWatchLater;
+  final VoidCallback onBack, onPlay, onWatchLater, onFavorite;
   final VoidCallback? onDownload;
 
   @override
@@ -316,7 +338,7 @@ class _ImmersiveHero extends StatelessWidget {
     return SizedBox(
       height: h,
       child: Stack(fit: StackFit.expand, children: [
-        Hero(tag: 'media-${media.id}', child: CinematyNetworkImage(url: backdrop)),
+        Hero(tag: 'media-${media.id}', child: CinematyNetworkImage(url: backdrop, memCacheWidth: 2200)),
         const DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -370,11 +392,121 @@ class _ImmersiveHero extends StatelessWidget {
                 progress: downloading ? downloadProgress : null,
                 onTap: onDownload,
               ),
-              _HeroAction(icon: watchLater ? Icons.watch_later_rounded : Icons.watch_later_outlined, label: watchLater ? 'محفوظ' : 'مشاهدة لاحقاً', onTap: onWatchLater),
+              Directionality(
+                textDirection: TextDirection.rtl,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _FavoriteSaveButton(
+                      selected: favorite,
+                      onTap: onFavorite,
+                    ),
+                    const SizedBox(width: 9),
+                    _HeroAction(
+                      icon: watchLater ? Icons.watch_later_rounded : Icons.watch_later_outlined,
+                      label: watchLater ? 'محفوظ' : 'مشاهدة لاحقاً',
+                      onTap: onWatchLater,
+                    ),
+                  ],
+                ),
+              ),
             ]),
           ]),
         ),
       ]),
+    );
+  }
+}
+
+
+class _FavoriteSaveButton extends StatefulWidget {
+  const _FavoriteSaveButton({required this.selected, required this.onTap});
+
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_FavoriteSaveButton> createState() => _FavoriteSaveButtonState();
+}
+
+class _FavoriteSaveButtonState extends State<_FavoriteSaveButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    _scale = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween<double>(begin: 1, end: 1.18).chain(CurveTween(curve: Curves.easeOutCubic)), weight: 42),
+      TweenSequenceItem(tween: Tween<double>(begin: 1.18, end: .94).chain(CurveTween(curve: Curves.easeInOut)), weight: 20),
+      TweenSequenceItem(tween: Tween<double>(begin: .94, end: 1).chain(CurveTween(curve: Curves.easeOutBack)), weight: 38),
+    ]).animate(_controller);
+  }
+
+  @override
+  void didUpdateWidget(covariant _FavoriteSaveButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selected != widget.selected && widget.selected) {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = widget.selected;
+    const yellow = Color(0xFFFFC928);
+
+    return Tooltip(
+      message: selected ? 'إزالة من المحفوظات' : 'حفظ',
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          widget.onTap();
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: selected ? yellow.withOpacity(.16) : Colors.black.withOpacity(.34),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: selected ? yellow.withOpacity(.55) : Colors.white.withOpacity(.13),
+            ),
+            boxShadow: selected
+                ? [BoxShadow(color: yellow.withOpacity(.20), blurRadius: 18, spreadRadius: -4)]
+                : const [],
+          ),
+          child: ScaleTransition(
+            scale: _scale,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 260),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(scale: animation, child: child),
+              ),
+              child: Icon(
+                selected ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                key: ValueKey(selected),
+                size: 24,
+                color: selected ? yellow : Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

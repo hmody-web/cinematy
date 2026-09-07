@@ -19,11 +19,57 @@ import '../details/details_screen.dart';
 import '../library/library_screen.dart';
 import '../player/player_screen.dart';
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  final ScrollController _scrollController = ScrollController();
+  final ValueNotifier<double> _brandGlassProgress = ValueNotifier<double>(0);
+  final ValueNotifier<double> _brandOpacity = ValueNotifier<double>(1);
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_handleScroll);
+  }
+
+  void _handleScroll() {
+    if (!_scrollController.hasClients) return;
+    final offset = _scrollController.offset.clamp(0.0, 2000.0);
+
+    // Once we reach the Continue Watching level, keep the logo background
+    // enabled for every deeper scroll position. Only the logo opacity keeps
+    // changing afterwards. ValueNotifiers rebuild only the top-bar content,
+    // not the entire home feed, which keeps scrolling smooth.
+    final glass = offset >= 390.0 ? 1.0 : 0.0;
+
+    // من مستوى قسم "أكمل المشاهدة" وما تحته يبقى الشعار وخلفيته
+    // ظاهرين دائماً، حتى لو كان المستخدم في آخر الصفحة ثم بدأ بالصعود.
+    // لا نخفي الشعار حسب عمق السكرول؛ فقط نبدّل الخلفية عند العتبة.
+    if (_brandGlassProgress.value != glass) {
+      _brandGlassProgress.value = glass;
+    }
+    if (_brandOpacity.value != 1.0) {
+      _brandOpacity.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_handleScroll)
+      ..dispose();
+    _brandGlassProgress.dispose();
+    _brandOpacity.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final feed = ref.watch(homeFeedProvider);
     final access = ref.watch(networkAccessProvider);
     final library = ref.watch(libraryProvider);
@@ -131,6 +177,7 @@ class HomeScreen extends ConsumerWidget {
 
           return CustomScrollView(
             key: const PageStorageKey('home-scroll'),
+            controller: _scrollController,
             physics: const BouncingScrollPhysics(
               parent: AlwaysScrollableScrollPhysics(),
             ),
@@ -138,6 +185,8 @@ class HomeScreen extends ConsumerWidget {
             slivers: [
               _topBarSliver(
                 downloads.items.length + downloads.activeItems.length,
+                brandGlassProgressListenable: _brandGlassProgress,
+                brandOpacityListenable: _brandOpacity,
                 onContinue: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
@@ -251,6 +300,10 @@ SliverAppBar _topBarSliver(
   int downloadsCount, {
   required VoidCallback onContinue,
   required VoidCallback onDownloads,
+  double brandGlassProgress = 0,
+  double brandOpacity = 1,
+  ValueListenable<double>? brandGlassProgressListenable,
+  ValueListenable<double>? brandOpacityListenable,
 }) =>
     SliverAppBar(
       pinned: false,
@@ -273,11 +326,27 @@ SliverAppBar _topBarSliver(
         ),
       ),
       titleSpacing: 16,
-      title: CinematyTopBarContent(
-        downloadsCount: downloadsCount,
-        onContinue: onContinue,
-        onDownloads: onDownloads,
-      ),
+      title: brandGlassProgressListenable == null || brandOpacityListenable == null
+          ? CinematyTopBarContent(
+              downloadsCount: downloadsCount,
+              onContinue: onContinue,
+              onDownloads: onDownloads,
+              brandGlassProgress: brandGlassProgress,
+              brandOpacity: brandOpacity,
+            )
+          : ValueListenableBuilder<double>(
+              valueListenable: brandGlassProgressListenable,
+              builder: (context, glass, _) => ValueListenableBuilder<double>(
+                valueListenable: brandOpacityListenable,
+                builder: (context, opacity, _) => CinematyTopBarContent(
+                  downloadsCount: downloadsCount,
+                  onContinue: onContinue,
+                  onDownloads: onDownloads,
+                  brandGlassProgress: glass,
+                  brandOpacity: opacity,
+                ),
+              ),
+            ),
     );
 
 class _UnavailableHome extends StatelessWidget {
@@ -518,7 +587,7 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          CinematyNetworkImage(url: image),
+                          CinematyNetworkImage(url: image, memCacheWidth: 1800),
                           const DecoratedBox(
                             decoration: BoxDecoration(
                               gradient: LinearGradient(

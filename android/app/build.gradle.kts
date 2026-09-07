@@ -14,7 +14,7 @@ android {
 
     defaultConfig {
         applicationId = "com.cinematy.app"
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(flutter.minSdkVersion, 24)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -23,3 +23,8 @@ android {
     buildTypes { release { signingConfig = signingConfigs.getByName("debug") } }
 }
 flutter { source = "../.." }
+
+
+dependencies {
+    implementation("com.github.QWEA0:liquidglass:v2.0.8")
+}

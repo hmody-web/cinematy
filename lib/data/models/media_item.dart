@@ -35,12 +35,24 @@ class MediaItem {
     final season = JsonUtils.integer(json, ['season', 'seasonNumber'], fallback: -1);
     final episode = JsonUtils.integer(json, ['episodeNummer', 'episodeNumber', 'episode'], fallback: -1);
     final id = JsonUtils.string(json, ['nb', 'videoId', 'videoID', 'id', 'item_id', '_id']);
+    // Cinemana exposes separate image sizes. Keep the medium thumbnail for
+    // list/poster cards, but preserve the full object image for immersive
+    // banners/detail pages. The native Cinemana app model contains both URL
+    // spellings (ObjUrl and ObjURL), so support both exactly.
     final poster = JsonUtils.string(json, [
-      'poster', 'imgMediumThumbObjUrl', 'imgThumbObjUrl', 'imgObjUrl', 'imgMediumThumb',
-      'imgThumb', 'seasonPoster', 'episodePoster', 'image', 'cover', 'thumbnail',
+      'poster', 'posterUrl', 'posterURL',
+      'imgMediumThumbObjUrl', 'imgMediumThumbObjURL',
+      'imgThumbObjUrl', 'imgThumbObjURL',
+      'imgMediumThumb', 'imgThumb',
+      'imgObjUrl', 'imgObjURL',
+      'seasonPoster', 'episodePoster', 'image', 'cover', 'thumbnail',
     ]);
     final backdrop = JsonUtils.string(json, [
-      'imgObjUrl', 'backdrop', 'backdrop_path', 'background', 'cover', 'poster',
+      'imgObjUrl', 'imgObjURL',
+      'fullImage', 'full_image', 'originalImage', 'original_image',
+      'backdrop', 'backdropUrl', 'backdropURL', 'backdrop_path',
+      'background', 'cover', 'poster', 'posterUrl', 'posterURL',
+      'imgMediumThumbObjUrl', 'imgMediumThumbObjURL',
     ]);
 
     return MediaItem(

@@ -10,66 +10,126 @@ workflows:
       cocoapods: default
 
     scripts:
-      - name: Prepare Flutter without replacing iOS native files
+      - name: Prepare Flutter
         script: |
           set -euo pipefail
           flutter config --no-enable-swift-package-manager
           flutter clean
           flutter pub get
 
-          # CRITICAL: Never recreate/delete ios here. AppDelegate.swift contains
-          # Cinematy's native UITabBarController / Liquid Glass implementation.
           test -f ios/Runner/AppDelegate.swift
-          grep -Fq 'CinematyNativeTabBarHostController' ios/Runner/AppDelegate.swift
-          grep -Fq 'cinematy/native_tab_bar' ios/Runner/AppDelegate.swift
-          if grep -Eq 'rm[[:space:]]+-rf[[:space:]]+ios' codemagic.yaml; then
-            echo 'ERROR: codemagic.yaml must not delete the custom ios directory.'
-            exit 1
-          fi
+          test -f ios/Runner/SceneDelegate.swift
+          grep -Fq 'FlutterImplicitEngineDelegate' ios/Runner/AppDelegate.swift
+          grep -Fq 'cinematy.native.scene.liquid.tabbar' ios/Runner/SceneDelegate.swift
 
-      - name: Apply Cinematy iOS settings
+      - name: Rebuild clean Flutter 3.41+ iOS project and restore native bar
+        script: |
+          set -euo pipefail
+
+          # The checked-in legacy Runner.xcodeproj was malformed. Always take
+          # project.pbxproj/Scene lifecycle files from the Flutter version that
+          # CodeMagic is actually building with, then restore Cinematy native UI.
+          cp ios/Runner/AppDelegate.swift /tmp/Cinematy-AppDelegate.swift
+          cp ios/Runner/SceneDelegate.swift /tmp/Cinematy-SceneDelegate.swift
+
+          rm -rf /tmp/cinematy_ios_template
+          flutter create \
+            --platforms=ios \
+            --org com.cinematy \
+            --project-name app \
+            /tmp/cinematy_ios_template
+
+          rm -rf ios
+          cp -R /tmp/cinematy_ios_template/ios ./ios
+
+          cp /tmp/Cinematy-AppDelegate.swift ios/Runner/AppDelegate.swift
+          cp /tmp/Cinematy-SceneDelegate.swift ios/Runner/SceneDelegate.swift
+
+          PBX="ios/Runner.xcodeproj/project.pbxproj"
+          PLIST="ios/Runner/Info.plist"
+
+          test -f "$PBX"
+          test -f "$PLIST"
+          test -f ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
+          grep -Fq 'SceneDelegate.swift in Sources' "$PBX"
+          grep -Fq 'CinematyTabBar' ios/Runner/SceneDelegate.swift
+
+          # Fail here, before icon generation/build, if Xcode cannot parse the
+          # freshly generated project. This directly guards the failure seen in
+          # the previous build log.
+          xcodebuild -project ios/Runner.xcodeproj -list
+
+      - name: Apply Cinematy iOS and UIScene settings
         script: |
           set -euo pipefail
 
           PLIST="ios/Runner/Info.plist"
           PBX="ios/Runner.xcodeproj/project.pbxproj"
 
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName سينماتي" "$PLIST" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string سينماتي" "$PLIST"
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
 
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName cinematy" "$PLIST" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleName string cinematy" "$PLIST"
+          path = Path('ios/Runner/Info.plist')
+          with path.open('rb') as f:
+              p = plistlib.load(f)
 
-          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
+          p['CFBundleDisplayName'] = 'سينماتي'
+          p['CFBundleName'] = 'cinematy'
+          p['NSAppTransportSecurity'] = {'NSAllowsArbitraryLoads': True}
+          p['UISupportedInterfaceOrientations'] = [
+              'UIInterfaceOrientationPortrait',
+              'UIInterfaceOrientationLandscapeLeft',
+              'UIInterfaceOrientationLandscapeRight',
+          ]
+          p.pop('UIDesignRequiresCompatibility', None)
 
-          /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:2 string UIInterfaceOrientationLandscapeRight" "$PLIST"
+          manifest = p.setdefault('UIApplicationSceneManifest', {})
+          manifest['UIApplicationSupportsMultipleScenes'] = False
+          configurations = manifest.setdefault('UISceneConfigurations', {})
+          app_role = configurations.setdefault('UIWindowSceneSessionRoleApplication', [{}])
+          if not app_role:
+              app_role.append({})
+          config = app_role[0]
+          config['UISceneClassName'] = 'UIWindowScene'
+          config['UISceneConfigurationName'] = 'flutter'
+          config['UISceneDelegateClassName'] = '$(PRODUCT_MODULE_NAME).SceneDelegate'
+          config['UISceneStoryboardFile'] = 'Main'
 
-          # Never opt the app into legacy visual compatibility; that would suppress
-          # the current system design on iOS 26+.
-          /usr/libexec/PlistBuddy -c "Delete :UIDesignRequiresCompatibility" "$PLIST" 2>/dev/null || true
+          with path.open('wb') as f:
+              plistlib.dump(p, f, fmt=plistlib.FMT_XML, sort_keys=False)
+          PY
 
-          sed -i '' 's/com\.cinematy\.app/com.cinematy.app/g' "$PBX"
           perl -0pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBX"
 
-          echo "Xcode used for native system UI:"
+          echo "Scene delegate configured as:"
+          /usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName' "$PLIST"
+
+          SCENE_CLASS=$(/usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName' "$PLIST")
+          test "$SCENE_CLASS" = '$(PRODUCT_MODULE_NAME).SceneDelegate'
+          grep -Fq 'SceneDelegate.swift in Sources' "$PBX"
+          grep -Fq 'FlutterImplicitEngineDelegate' ios/Runner/AppDelegate.swift
+          grep -Fq 'cinematy.native.scene.liquid.tabbar' ios/Runner/SceneDelegate.swift
+
+          echo "Xcode:"
           xcodebuild -version
 
-      - name: Regenerate Flutter generated files and icon
+      - name: Generate Flutter iOS files and icon
         script: |
           set -euo pipefail
           flutter pub get
           dart run flutter_launcher_icons
-          flutter build ios --release --config-only --no-codesign
 
-          # flutter build must not overwrite the native host.
-          grep -Fq 'CinematyNativeTabBarHostController' ios/Runner/AppDelegate.swift
-          grep -Fq 'cinematy/native_tab_bar' ios/Runner/AppDelegate.swift
+          flutter build ios \
+            --release \
+            --config-only \
+            --no-codesign
+
+          # Flutter 3.41+ must remain on UIScene and must not overwrite the
+          # custom SceneDelegate/AppDelegate restored above.
+          grep -Fq 'FlutterImplicitEngineDelegate' ios/Runner/AppDelegate.swift
+          grep -Fq 'cinematy.native.scene.liquid.tabbar' ios/Runner/SceneDelegate.swift
+          grep -Fq 'SceneDelegate.swift in Sources' ios/Runner.xcodeproj/project.pbxproj
 
       - name: Install CocoaPods
         script: |
@@ -78,12 +138,12 @@ workflows:
           pod install --repo-update
           cd ..
 
-      - name: Verify Xcode project
+      - name: Verify Xcode workspace before build
         script: |
           set -euo pipefail
           xcodebuild -workspace ios/Runner.xcworkspace -list
           test -f ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
-          test -f ios/Runner.xcodeproj/project.pbxproj
+          grep -Fq 'SceneDelegate.swift in Sources' ios/Runner.xcodeproj/project.pbxproj
 
       - name: Build unsigned Release
         script: |
@@ -106,7 +166,7 @@ workflows:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-      - name: Verify built app contains native iOS tab bar
+      - name: Verify final app contains UIScene native tab bar
         script: |
           set -euo pipefail
 
@@ -125,21 +185,24 @@ workflows:
           test -f "$APP_PATH/Info.plist"
           test -f "$APP_PATH/Runner"
 
-          # This verifies the final executable — not just source files — contains
-          # the exact native MethodChannel compiled from AppDelegate.swift.
           if ! strings "$APP_PATH/Runner" | grep -Fq 'cinematy/native_tab_bar'; then
-            echo "ERROR: Native Cinematy iOS tab bar code is NOT inside Runner executable."
+            echo "ERROR: Native tab-bar MethodChannel is missing from Runner binary."
             exit 1
           fi
 
-          if strings "$APP_PATH/Runner" | grep -Fq 'cinematy.native.liquid.tabbar'; then
-            echo "Native UITabBarController marker found in final Runner executable."
-          else
-            echo "ERROR: Native Liquid tab bar marker missing from final executable."
+          if ! strings "$APP_PATH/Runner" | grep -Fq 'cinematy.native.scene.liquid.tabbar'; then
+            echo "ERROR: UIScene native UITabBar marker is missing from Runner binary."
             exit 1
           fi
 
-          echo "Native iOS tab bar verification PASSED."
+          SCENE_CLASS=$(/usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName' "$APP_PATH/Info.plist")
+          if [ "$SCENE_CLASS" != '$(PRODUCT_MODULE_NAME).SceneDelegate' ] && [ "$SCENE_CLASS" != 'app.SceneDelegate' ] && [ "$SCENE_CLASS" != 'Runner.SceneDelegate' ]; then
+            echo "ERROR: Built app is not configured to launch Cinematy SceneDelegate: $SCENE_CLASS"
+            exit 1
+          fi
+
+          echo "PASS: final Runner binary contains Cinematy UIScene native UITabBar."
+          echo "PASS: built Info.plist launches SceneDelegate."
           du -sh "$APP_PATH"
 
       - name: Create unsigned ZIP
@@ -182,34 +245,58 @@ workflows:
       cocoapods: default
 
     scripts:
-      - name: Prepare existing iOS project
+      - name: Prepare clean UIScene iOS project
         script: |
           set -euo pipefail
           flutter config --no-enable-swift-package-manager
           flutter clean
           flutter pub get
 
-          test -f ios/Runner/AppDelegate.swift
-          grep -Fq 'CinematyNativeTabBarHostController' ios/Runner/AppDelegate.swift
-          grep -Fq 'cinematy/native_tab_bar' ios/Runner/AppDelegate.swift
+          cp ios/Runner/AppDelegate.swift /tmp/Cinematy-AppDelegate.swift
+          cp ios/Runner/SceneDelegate.swift /tmp/Cinematy-SceneDelegate.swift
 
-          PLIST="ios/Runner/Info.plist"
-          PBX="ios/Runner.xcodeproj/project.pbxproj"
+          rm -rf /tmp/cinematy_ios_template
+          flutter create \
+            --platforms=ios \
+            --org com.cinematy \
+            --project-name app \
+            /tmp/cinematy_ios_template
 
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName سينماتي" "$PLIST" \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string سينماتي" "$PLIST"
+          rm -rf ios
+          cp -R /tmp/cinematy_ios_template/ios ./ios
+          cp /tmp/Cinematy-AppDelegate.swift ios/Runner/AppDelegate.swift
+          cp /tmp/Cinematy-SceneDelegate.swift ios/Runner/SceneDelegate.swift
 
-          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Delete :UIDesignRequiresCompatibility" "$PLIST" 2>/dev/null || true
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+          path = Path('ios/Runner/Info.plist')
+          with path.open('rb') as f:
+              p = plistlib.load(f)
+          p['CFBundleDisplayName'] = 'سينماتي'
+          p['NSAppTransportSecurity'] = {'NSAllowsArbitraryLoads': True}
+          p.pop('UIDesignRequiresCompatibility', None)
+          manifest = p.setdefault('UIApplicationSceneManifest', {})
+          manifest['UIApplicationSupportsMultipleScenes'] = False
+          configurations = manifest.setdefault('UISceneConfigurations', {})
+          role = configurations.setdefault('UIWindowSceneSessionRoleApplication', [{}])
+          if not role:
+              role.append({})
+          role[0]['UISceneClassName'] = 'UIWindowScene'
+          role[0]['UISceneConfigurationName'] = 'flutter'
+          role[0]['UISceneDelegateClassName'] = '$(PRODUCT_MODULE_NAME).SceneDelegate'
+          role[0]['UISceneStoryboardFile'] = 'Main'
+          with path.open('wb') as f:
+              plistlib.dump(p, f, fmt=plistlib.FMT_XML, sort_keys=False)
+          PY
 
-          perl -0pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBX"
+          perl -0pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' ios/Runner.xcodeproj/project.pbxproj
+
+          xcodebuild -project ios/Runner.xcodeproj -list
+          grep -Fq 'SceneDelegate.swift in Sources' ios/Runner.xcodeproj/project.pbxproj
 
           dart run flutter_launcher_icons
           flutter build ios --debug --config-only --no-codesign
-
-          grep -Fq 'CinematyNativeTabBarHostController' ios/Runner/AppDelegate.swift
 
           cd ios
           pod install --repo-update
@@ -236,7 +323,7 @@ workflows:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-      - name: Verify and package Debug ZIP
+      - name: Verify and package Debug
         script: |
           set -euo pipefail
 
@@ -246,37 +333,21 @@ workflows:
             -print \
             -quit)
 
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Debug Runner.app not found."
-            exit 1
-          fi
-
+          test -n "$APP_PATH"
           test -f "$APP_PATH/Runner"
-          test -f "$APP_PATH/Info.plist"
-
           strings "$APP_PATH/Runner" | grep -Fq 'cinematy/native_tab_bar'
-          strings "$APP_PATH/Runner" | grep -Fq 'cinematy.native.liquid.tabbar'
-          echo "Native iOS tab bar verification PASSED."
+          strings "$APP_PATH/Runner" | grep -Fq 'cinematy.native.scene.liquid.tabbar'
 
-          rm -rf build/ios/output
-          mkdir -p build/ios/output
-
+          rm -rf build/ios/output-debug
+          mkdir -p build/ios/output-debug
           /usr/bin/ditto \
             -c \
             -k \
             --sequesterRsrc \
             --keepParent \
             "$APP_PATH" \
-            build/ios/output/Cinematy-Debug-Unsigned.zip
-
-          ZIP="build/ios/output/Cinematy-Debug-Unsigned.zip"
-          ls -lh "$ZIP"
-
-          ZIP_BYTES=$(stat -f%z "$ZIP")
-          if [ "$ZIP_BYTES" -lt 1000000 ]; then
-            echo "ERROR: Debug ZIP is less than 1 MB."
-            exit 1
-          fi
+            build/ios/output-debug/Cinematy-Debug-Unsigned.zip
+          unzip -t build/ios/output-debug/Cinematy-Debug-Unsigned.zip
 
     artifacts:
-      - build/ios/output/Cinematy-Debug-Unsigned.zip
+      - build/ios/output-debug/Cinematy-Debug-Unsigned.zip

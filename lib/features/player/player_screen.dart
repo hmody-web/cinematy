@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
@@ -41,6 +42,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     with WidgetsBindingObserver {
   late final Player _player;
   Player? _previewPlayer;
+  Player? _previewWarmupPlayer;
+  VideoController? _previewController;
+  VideoController? _previewWarmupController;
   late final VideoController _controller;
   late final CinemanaApi _api;
   late final LibraryStore _libraryStore;
@@ -63,17 +67,31 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   bool _scrubbing = false;
   bool _previewReady = false;
   bool _switchingSource = false;
+  bool _initializingPlayback = true;
+  Duration? _startupResumeTarget;
+  Uint8List? _sourceSwitchFrame;
   bool _navigatingNext = false;
   String? _error;
   Uint8List? _previewBytes;
+  Uint8List? _previewFallbackBytes;
 
   final LinkedHashMap<int, Uint8List> _previewCache =
       LinkedHashMap<int, Uint8List>();
-  static const int _previewCacheLimit = 14;
+  static const int _previewCacheLimit = 180;
+  static const int _previewStepSeconds = 15;
+  static const int _previewCoarseStepBuckets = 4; // لقطة كل دقيقة في المرور السريع الأول
+  static const int _previewBackWindowSeconds = 5 * 60;
+  static const int _previewForwardWindowSeconds = 10 * 60;
   int _previewGeneration = 0;
   bool _previewCaptureBusy = false;
   Duration? _pendingPreviewTarget;
   DateTime? _lastPreviewCaptureAt;
+
+  Directory? _previewCacheDirectory;
+  final Set<int> _previewDiskBuckets = <int>{};
+  bool _previewWarmupRunning = false;
+  bool _previewWarmupStopRequested = false;
+  int _previewWarmupGeneration = 0;
 
   List<VideoSource> _sources = const <VideoSource>[];
   List<SubtitleSource> _subtitles = const <SubtitleSource>[];
@@ -105,18 +123,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _controller = VideoController(_player);
 
     _positionSub = _player.stream.position.listen((value) {
-      if (!mounted || _scrubbing || _switchingSource) return;
+      if (!mounted || _scrubbing || _switchingSource || _initializingPlayback) return;
       setState(() => _position = value);
       _handleNearEnd(value);
-      if (_duration.inMilliseconds > 0 &&
+      if (!_initializingPlayback &&
+          !_switchingSource &&
+          _duration.inMilliseconds > 0 &&
           value.inMilliseconds >= (_duration.inMilliseconds * .985)) {
         _libraryStore.clearProgress(widget.media.id);
       }
     });
 
     _durationSub = _player.stream.duration.listen((value) {
-      if (!mounted || _switchingSource) return;
+      if (!mounted) return;
       setState(() => _duration = value);
+      if (value.inSeconds > 0) {
+        unawaited(_startPreviewWarmup());
+      }
     });
 
     _bufferingSub = _player.stream.buffering.listen((value) {
@@ -148,9 +171,31 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   Future<void> _load() async {
     try {
+      _initializingPlayback = true;
+
+      // اقرأ موضع الاستكمال قبل فتح أي مصدر. بهذه الطريقة لا تستطيع إشعارات
+      // position/duration المؤقتة أثناء open أن تمسح أو تغيّر الموضع المحفوظ.
+      await _libraryStore.load();
+      final progress = _libraryStore.watchProgress(widget.media.id);
+      if (progress != null &&
+          progress.positionMs >= 5000 &&
+          progress.ratio < .97) {
+        _startupResumeTarget = Duration(milliseconds: progress.positionMs);
+        _position = _startupResumeTarget!;
+        if (progress.durationMs > 0) {
+          _duration = Duration(milliseconds: progress.durationMs);
+        }
+      } else {
+        _startupResumeTarget = null;
+      }
+
       if (widget.localPath?.isNotEmpty == true) {
         _currentMediaUrl = widget.localPath!;
-        await _player.open(Media(widget.localPath!), play: true);
+        await _openRawMedia(
+          widget.localPath!,
+          target: _startupResumeTarget,
+          playAfterOpen: true,
+        );
         await _preparePreview(widget.localPath!);
 
         final downloaded = ref.read(downloadProvider).itemFor(widget.media.id);
@@ -177,21 +222,26 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           _selectedSource!,
           preservePosition: false,
           forcePlay: true,
+          explicitPosition: _startupResumeTarget,
         );
       }
 
       await _selectArabicByDefault();
       await _player.setRate(_playbackRate);
 
-      final progress = _libraryStore.watchProgress(widget.media.id);
-      if (progress != null &&
-          progress.positionMs >= 5000 &&
-          progress.ratio < .97) {
-        final target = Duration(milliseconds: progress.positionMs);
-        await _player.seek(target);
-        _position = target;
+      // تحقق نهائي بعد تجهيز الترجمة ومعدل التشغيل، لأن بعض روابط HLS
+      // تعيد الموضع إلى الصفر بعد أول frame أو بعد اكتمال الـ manifest.
+      if (_startupResumeTarget != null) {
+        await _stabilizePlaybackPosition(
+          _startupResumeTarget!,
+          shouldPlay: true,
+        );
+        _position = _player.state.position.inMilliseconds > 0
+            ? _player.state.position
+            : _startupResumeTarget!;
       }
 
+      _initializingPlayback = false;
       _scheduleHide();
       if (mounted) {
         setState(() {
@@ -200,6 +250,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         });
       }
     } catch (e) {
+      _initializingPlayback = false;
       if (mounted) {
         setState(() {
           _loading = false;
@@ -265,16 +316,318 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _previewReady = false;
     _previewCache.clear();
     _previewGeneration++;
+    _previewWarmupGeneration++;
+    _previewWarmupStopRequested = true;
     _pendingPreviewTarget = null;
     _previewCaptureBusy = false;
     _lastPreviewCaptureAt = null;
+    _previewBytes = null;
+    _previewFallbackBytes = null;
+
     final old = _previewPlayer;
     _previewPlayer = null;
+    _previewController = null;
     if (old != null) {
       try {
         await old.dispose();
       } catch (_) {}
     }
+
+    final oldWarmup = _previewWarmupPlayer;
+    _previewWarmupPlayer = null;
+    _previewWarmupController = null;
+    if (oldWarmup != null) {
+      try {
+        await oldWarmup.dispose();
+      } catch (_) {}
+    }
+
+    await _openPreviewCacheDirectory();
+    _previewWarmupStopRequested = false;
+
+    // نجهز محرك المعاينة فور فتح الفيديو بدل انتظار أول لمسة من المستخدم.
+    // هذا يلغي أغلب التأخير الذي كان يحصل عند أول سحب.
+    unawaited(_primeInteractivePreviewEngine());
+
+    if (_duration.inSeconds > 0) {
+      unawaited(_startPreviewWarmup());
+    }
+  }
+
+  String get _previewCacheKey {
+    final raw = widget.media.id.toString().trim();
+    if (raw.isEmpty) return 'media';
+    return raw.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+  }
+
+  Future<void> _openPreviewCacheDirectory() async {
+    try {
+      final root = await getTemporaryDirectory();
+      final dir = Directory(
+        '${root.path}${Platform.pathSeparator}cinematy_previews'
+        '${Platform.pathSeparator}$_previewCacheKey',
+      );
+      if (!await dir.exists()) await dir.create(recursive: true);
+      _previewCacheDirectory = dir;
+      _previewDiskBuckets.clear();
+      await for (final entity in dir.list(followLinks: false)) {
+        if (entity is! File) continue;
+        final name = entity.path.split(Platform.pathSeparator).last;
+        final match = RegExp(r'^(\d+)\.jpg$').firstMatch(name);
+        if (match != null) {
+          final bucket = int.tryParse(match.group(1)!);
+          if (bucket != null) _previewDiskBuckets.add(bucket);
+        }
+      }
+    } catch (_) {
+      _previewCacheDirectory = null;
+      _previewDiskBuckets.clear();
+    }
+  }
+
+  int _previewBucketFor(Duration position) {
+    if (position.isNegative) return 0;
+    return position.inSeconds ~/ _previewStepSeconds;
+  }
+
+  Duration _previewTimeForBucket(int bucket) {
+    final seconds = bucket * _previewStepSeconds;
+    final maxSeconds = _duration.inSeconds > 0 ? _duration.inSeconds : seconds;
+    return Duration(seconds: seconds.clamp(0, maxSeconds).toInt());
+  }
+
+  File? _previewFileForBucket(int bucket) {
+    final dir = _previewCacheDirectory;
+    if (dir == null) return null;
+    return File('${dir.path}${Platform.pathSeparator}$bucket.jpg');
+  }
+
+  Future<Uint8List?> _readPreviewFromDisk(int bucket) async {
+    if (!_previewDiskBuckets.contains(bucket)) return null;
+    final file = _previewFileForBucket(bucket);
+    if (file == null) return null;
+    try {
+      if (!await file.exists()) {
+        _previewDiskBuckets.remove(bucket);
+        return null;
+      }
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return null;
+      _rememberPreview(bucket, bytes);
+      return bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _rememberPreview(int bucket, Uint8List bytes) {
+    _previewCache.remove(bucket);
+    _previewCache[bucket] = bytes;
+    while (_previewCache.length > _previewCacheLimit) {
+      _previewCache.remove(_previewCache.keys.first);
+    }
+  }
+
+  Future<void> _writePreviewToDisk(int bucket, Uint8List bytes) async {
+    final file = _previewFileForBucket(bucket);
+    if (file == null) return;
+    try {
+      await file.writeAsBytes(bytes, flush: false);
+      _previewDiskBuckets.add(bucket);
+    } catch (_) {}
+  }
+
+  Future<Player?> _ensurePreviewWarmupPlayer() async {
+    if (_previewWarmupPlayer != null) return _previewWarmupPlayer;
+    final url = _currentMediaUrl;
+    if (url == null || url.isEmpty) return null;
+    try {
+      final player = Player();
+      _previewWarmupPlayer = player;
+      // media_kit لا يفك ترميز الفيديو للـ screenshot بدون VideoController مرتبط.
+      _previewWarmupController = VideoController(player);
+      await player.open(Media(url), play: false);
+      await player.setVolume(0);
+      return player;
+    } catch (_) {
+      try {
+        await _previewWarmupPlayer?.dispose();
+      } catch (_) {}
+      _previewWarmupPlayer = null;
+      return null;
+    }
+  }
+
+  Duration get _previewCenterPosition {
+    // أثناء فتح المصدر أو استكمال المشاهدة قد تتأخر قيمة _position في الواجهة،
+    // بينما Player نفسه يكون وصل فعلياً إلى موضع المستخدم. نعتمد الموضع الفعلي
+    // حتى لا يبدأ تجهيز الـ thumbnails من الثانية صفر دائماً.
+    final live = _player.state.position;
+    if (live > Duration.zero) return live;
+    if (_startupResumeTarget != null && _startupResumeTarget! > Duration.zero) {
+      return _startupResumeTarget!;
+    }
+    return _position;
+  }
+
+  List<int> _previewWarmupOrder() {
+    if (_duration.inSeconds <= 0) return const <int>[];
+    final maxBucket = _previewBucketFor(_duration);
+    final center = _previewBucketFor(_previewCenterPosition);
+    final backBuckets = _previewBackWindowSeconds ~/ _previewStepSeconds;
+    final forwardBuckets = _previewForwardWindowSeconds ~/ _previewStepSeconds;
+    final nearStart = (center - backBuckets).clamp(0, maxBucket).toInt();
+    final nearEnd = (center + forwardBuckets).clamp(0, maxBucket).toInt();
+    final order = <int>[];
+    final seen = <int>{};
+
+    void add(int bucket) {
+      if (bucket < 0 || bucket > maxBucket || !seen.add(bucket)) return;
+      order.add(bucket);
+    }
+
+    // المرور الأول سريع وخشن: نغطي نافذة 5 دقائق للخلف و10 دقائق للأمام
+    // بلقطة كل دقيقة. النتيجة: عند لمس أي مكان قريب يوجد غالباً Thumbnail جاهز فوراً.
+    add(center);
+    for (var d = _previewCoarseStepBuckets; ; d += _previewCoarseStepBuckets) {
+      var added = false;
+      if (center + d <= nearEnd) {
+        add(center + d);
+        added = true;
+      }
+      if (center - d >= nearStart) {
+        add(center - d);
+        added = true;
+      }
+      if (!added) break;
+    }
+
+    // المرور الثاني يملأ كل 15 ثانية داخل النافذة القريبة.
+    for (var d = 1; ; d++) {
+      var added = false;
+      if (center + d <= nearEnd) {
+        add(center + d);
+        added = true;
+      }
+      if (center - d >= nearStart) {
+        add(center - d);
+        added = true;
+      }
+      if (!added) break;
+    }
+
+    // بعدها نكمل بقية الفيديو بالخلفية بدون تعطيل المستخدم.
+    for (var bucket = nearEnd + 1; bucket <= maxBucket; bucket++) add(bucket);
+    for (var bucket = nearStart - 1; bucket >= 0; bucket--) add(bucket);
+    return order;
+  }
+
+  Future<void> _startPreviewWarmup() async {
+    if (_previewWarmupRunning || _duration.inSeconds <= 0) return;
+    final url = _currentMediaUrl;
+    if (url == null || url.isEmpty) return;
+    if (_previewCacheDirectory == null) {
+      await _openPreviewCacheDirectory();
+    }
+    if (_previewWarmupRunning || _duration.inSeconds <= 0) return;
+
+    _previewWarmupRunning = true;
+    _previewWarmupStopRequested = false;
+    final generation = ++_previewWarmupGeneration;
+    try {
+      final player = await _ensurePreviewWarmupPlayer();
+      if (player == null) return;
+      for (final bucket in _previewWarmupOrder()) {
+        if (!mounted ||
+            _previewWarmupStopRequested ||
+            generation != _previewWarmupGeneration) {
+          break;
+        }
+        if (_previewDiskBuckets.contains(bucket)) continue;
+
+        // أثناء السحب نعطي الأولوية المطلقة لإصبع المستخدم ولا ننافسه على المعالج/الشبكة.
+        while (_scrubbing &&
+            mounted &&
+            !_previewWarmupStopRequested &&
+            generation == _previewWarmupGeneration) {
+          await Future<void>.delayed(const Duration(milliseconds: 180));
+        }
+        if (!mounted ||
+            _previewWarmupStopRequested ||
+            generation != _previewWarmupGeneration) {
+          break;
+        }
+
+        try {
+          final bytes = await _capturePreviewFrame(
+            player,
+            _previewTimeForBucket(bucket),
+          );
+          if (_scrubbing) continue;
+          if (bytes == null || bytes.isEmpty) continue;
+          _rememberPreview(bucket, bytes);
+          await _writePreviewToDisk(bucket, bytes);
+        } catch (_) {
+          // فشل لقطة واحدة لا يوقف تجهيز بقية الفيلم.
+        }
+
+        // استراحة صغيرة تمنع تجهيز الصور من التأثير على تشغيل الفيلم الأساسي.
+        await Future<void>.delayed(const Duration(milliseconds: 45));
+      }
+    } finally {
+      _previewWarmupRunning = false;
+      if (mounted &&
+          !_previewWarmupStopRequested &&
+          generation != _previewWarmupGeneration &&
+          _duration.inSeconds > 0) {
+        unawaited(_startPreviewWarmup());
+      }
+    }
+  }
+
+  Future<void> _primeInteractivePreviewEngine() async {
+    try {
+      final player = await _ensurePreviewPlayer();
+      if (player == null || !mounted) return;
+
+      // ثبت المشغل المخفي حول مكان المشاهدة الحالي حتى أول seek يكون سريعاً.
+      final target = _previewCenterPosition;
+      if (target > Duration.zero) {
+        await player.seek(target);
+      }
+      await player.play();
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+      await player.pause();
+
+      // نخزن frame حقيقي من موضع المشاهدة الحالي كصورة فورية عند أول لمس،
+      // ثم يتم استبدالها مباشرة بالـframe الدقيق المطلوب عند اكتماله.
+      var bytes = await player.screenshot(format: 'image/jpeg');
+      if (bytes == null || bytes.isEmpty) {
+        bytes = await player.screenshot(format: 'image/png');
+      }
+      if (bytes != null && bytes.isNotEmpty && mounted) {
+        final bucket = _previewBucketFor(target);
+        _rememberPreview(bucket, bytes);
+        _previewFallbackBytes = bytes;
+        unawaited(_writePreviewToDisk(bucket, bytes));
+      }
+    } catch (_) {
+      // المعاينة لا يجب أن تؤثر على تشغيل الفيديو الأساسي.
+    }
+  }
+
+  Uint8List? _nearestMemoryPreview(int bucket, {int maxDistance = 8}) {
+    Uint8List? best;
+    var bestDistance = maxDistance + 1;
+    for (final entry in _previewCache.entries) {
+      final distance = (entry.key - bucket).abs();
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = entry.value;
+        if (distance == 0) break;
+      }
+    }
+    return best ?? _previewFallbackBytes;
   }
 
   Future<Player?> _ensurePreviewPlayer() async {
@@ -284,6 +637,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     try {
       final player = Player();
       _previewPlayer = player;
+      // ربط VideoController ضروري حتى يبدأ libmpv بفك ترميز إطارات الفيديو.
+      _previewController = VideoController(player);
       await player.open(Media(url), play: false);
       await player.setVolume(0);
       _previewReady = true;
@@ -294,6 +649,88 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         await _previewPlayer?.dispose();
       } catch (_) {}
       _previewPlayer = null;
+      return null;
+    }
+  }
+
+  Future<void> _waitUntilSeekSettles(
+    Player player,
+    Duration target, {
+    Duration timeout = const Duration(milliseconds: 1800),
+  }) async {
+    final toleranceMs = _duration.inSeconds > 0 ? 1800 : 2500;
+    try {
+      await player.stream.position.firstWhere((value) {
+        return (value.inMilliseconds - target.inMilliseconds).abs() <=
+            toleranceMs;
+      }).timeout(timeout);
+    } catch (_) {
+      // بعض روابط HLS لا ترسل position فوراً بعد seek؛ نكمل بمحاولة تحقق ثانية.
+    }
+  }
+
+  Future<void> _seekAndVerify(Player player, Duration target) async {
+    if (target <= Duration.zero) return;
+    await player.seek(target);
+    await _waitUntilSeekSettles(player, target);
+
+    // بعض المصادر تعيد الموضع بعد open/تغيير الجودة لحظة وصول أول frame.
+    // نتحقق مرة ثانية ونثبت نفس الثانية المطلوبة إذا انحرف الموضع بوضوح.
+    final actual = player.state.position;
+    if ((actual.inMilliseconds - target.inMilliseconds).abs() > 2200) {
+      await player.seek(target);
+      await _waitUntilSeekSettles(
+        player,
+        target,
+        timeout: const Duration(milliseconds: 1200),
+      );
+    }
+  }
+
+  Future<Uint8List?> _capturePreviewFrame(
+    Player player,
+    Duration target,
+  ) async {
+    try {
+      // seek وحده لا يعني أن libmpv فك frame جديداً. إذا أخذنا screenshot مباشرة
+      // يرجع غالباً آخر frame قديم (وفي حالتنا كان frame بداية الفيديو).
+      await player.pause();
+      await player.seek(target);
+
+      // انتظر وصول الـ timeline فعلياً للموضع المطلوب. روابط HLS تحتاج keyframe
+      // جديد قبل أن تتغير الصورة المعروضة.
+      await _waitUntilSeekSettles(
+        player,
+        target,
+        timeout: const Duration(milliseconds: 1500),
+      );
+
+      // شغّل بصمت مدة قصيرة حتى يتم فك أول frame حقيقي بعد الـ seek.
+      await player.play();
+      try {
+        await player.stream.buffering
+            .firstWhere((value) => value == false)
+            .timeout(const Duration(milliseconds: 650));
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(milliseconds: 110));
+      await player.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+
+      var bytes = await player.screenshot(format: 'image/jpeg');
+      if (bytes == null || bytes.isEmpty) {
+        await player.play();
+        await Future<void>.delayed(const Duration(milliseconds: 140));
+        await player.pause();
+        bytes = await player.screenshot(format: 'image/jpeg');
+      }
+      if (bytes == null || bytes.isEmpty) {
+        bytes = await player.screenshot(format: 'image/png');
+      }
+      return bytes;
+    } catch (_) {
+      try {
+        await player.pause();
+      } catch (_) {}
       return null;
     }
   }
@@ -343,50 +780,176 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     return copy.first;
   }
 
+  Future<void> _waitForPlayableDuration({
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    if (_player.state.duration > Duration.zero) return;
+    try {
+      await _player.stream.duration
+          .firstWhere((value) => value > Duration.zero)
+          .timeout(timeout);
+    } catch (_) {}
+  }
+
+  Future<void> _stabilizePlaybackPosition(
+    Duration target, {
+    required bool shouldPlay,
+  }) async {
+    if (target <= Duration.zero) {
+      if (shouldPlay) await _player.play();
+      return;
+    }
+
+    await _waitForPlayableDuration();
+    await _player.pause();
+
+    // أكثر من محاولة مقصودة: بعض HLS يقبل seek أولاً ثم يعيده للصفر
+    // عندما يصل أول keyframe أو يكتمل تحميل الـmanifest.
+    const waits = <Duration>[
+      Duration(milliseconds: 90),
+      Duration(milliseconds: 220),
+      Duration(milliseconds: 450),
+      Duration(milliseconds: 850),
+    ];
+
+    for (var i = 0; i < waits.length; i++) {
+      await _seekAndVerify(_player, target);
+      if (shouldPlay) await _player.play();
+      await Future<void>.delayed(waits[i]);
+
+      final actual = _player.state.position;
+      final tooFarBehind =
+          actual.inMilliseconds < target.inMilliseconds - 1800;
+      final unexpectedlyAhead =
+          actual.inMilliseconds > target.inMilliseconds + 9000;
+      if (!tooFarBehind && !unexpectedlyAhead) {
+        return;
+      }
+
+      await _player.pause();
+    }
+
+    await _seekAndVerify(_player, target);
+    if (shouldPlay) {
+      await _player.play();
+    } else {
+      await _player.pause();
+    }
+  }
+
+  Future<void> _openRawMedia(
+    String url, {
+    Duration? target,
+    required bool playAfterOpen,
+  }) async {
+    await _player.open(Media(url), play: false);
+    await _waitForPlayableDuration();
+    if (target != null && target > Duration.zero) {
+      await _stabilizePlaybackPosition(
+        target,
+        shouldPlay: playAfterOpen,
+      );
+    } else if (playAfterOpen) {
+      await _player.play();
+    }
+  }
+
+  Future<Uint8List?> _captureCurrentFrameForSourceSwitch() async {
+    try {
+      var bytes = await _player.screenshot(format: 'image/jpeg');
+      if (bytes == null || bytes.isEmpty) {
+        bytes = await _player.screenshot(format: 'image/png');
+      }
+      return bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _openSource(
     VideoSource source, {
     required bool preservePosition,
     bool forcePlay = false,
+    Duration? explicitPosition,
   }) async {
-    final oldPosition = preservePosition ? _player.state.position : Duration.zero;
+    // _position هو آخر موضع موثوق في الواجهة. state.position قد يرجع 0 مؤقتاً
+    // أثناء فتح manifest جديد، لذلك لا نسمح له أن يمسح موضع المستخدم.
+    final statePosition = _player.state.position;
+    final oldPosition = explicitPosition ??
+        (preservePosition
+            ? (_position > Duration.zero
+                ? _position
+                : statePosition)
+            : Duration.zero);
     final wasPlaying = forcePlay || _player.state.playing;
     final subtitle = _selectedSubtitle;
+
+    if (preservePosition && oldPosition > Duration.zero) {
+      await _libraryStore.saveProgress(widget.media, oldPosition, _duration);
+      _sourceSwitchFrame = await _captureCurrentFrameForSourceSwitch();
+    }
 
     _switchingSource = true;
     if (mounted) setState(() {});
     try {
       _currentMediaUrl = source.url;
       await _player.open(Media(source.url), play: false);
-      await _preparePreview(source.url);
+      await _waitForPlayableDuration();
 
       if (oldPosition > Duration.zero) {
-        await _player.seek(oldPosition);
+        await _stabilizePlaybackPosition(
+          oldPosition,
+          shouldPlay: false,
+        );
       }
+
       await _player.setRate(_playbackRate);
       if (subtitle != null) {
         try {
           await _applySubtitle(subtitle);
         } catch (_) {}
       }
-      if (wasPlaying) {
+
+      // لا نبدأ التشغيل إلا بعد تثبيت نفس الثانية. ثم نراقب أول ثانية
+      // لأن بعض الخوادم تعيد الموضع للصفر بعد بدء فك الترميز.
+      if (oldPosition > Duration.zero) {
+        await _stabilizePlaybackPosition(
+          oldPosition,
+          shouldPlay: wasPlaying,
+        );
+      } else if (wasPlaying) {
         await _player.play();
       } else {
         await _player.pause();
       }
 
+      if (!wasPlaying) await _player.pause();
+
+      await _preparePreview(source.url);
+
       if (mounted) {
         setState(() {
-          _position = oldPosition;
+          final actual = _player.state.position;
+          _position = oldPosition > Duration.zero
+              ? (actual.inMilliseconds >= oldPosition.inMilliseconds - 1800
+                  ? actual
+                  : oldPosition)
+              : actual;
+          _duration = _player.state.duration > Duration.zero
+              ? _player.state.duration
+              : _duration;
           _selectedSource = source;
         });
       }
     } finally {
       _switchingSource = false;
+      _sourceSwitchFrame = null;
       if (mounted) setState(() {});
     }
   }
 
   Future<void> _persistProgress() async {
+    if (_initializingPlayback || _switchingSource) return;
     if (_duration.inMilliseconds <= 0 || _position.inMilliseconds <= 0) return;
     if (_position.inMilliseconds >= (_duration.inMilliseconds * .97)) {
       await _libraryStore.clearProgress(widget.media.id);
@@ -452,23 +1015,43 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   void _previewAt(double value) {
-    final target = Duration(milliseconds: value.toInt());
-    setState(() {
-      _position = target;
-      _previewPosition = target;
-      _scrubbing = true;
-      _controls = true;
-    });
+    final maxMs = _duration.inMilliseconds > 0
+        ? _duration.inMilliseconds
+        : value.toInt();
+    final target = Duration(
+      milliseconds: value.round().clamp(0, maxMs).toInt(),
+    );
+    if (mounted) {
+      setState(() {
+        _position = target;
+        _previewPosition = target;
+        _scrubbing = true;
+        _controls = true;
+      });
+    }
 
-    final bucket = target.inSeconds ~/ 4;
+    final bucket = _previewBucketFor(target);
     final cached = _previewCache.remove(bucket);
     if (cached != null) {
       _previewCache[bucket] = cached;
-      setState(() => _previewBytes = cached);
+      if (mounted) setState(() => _previewBytes = cached);
+    } else {
+      // اعرض أقرب frame حقيقي متوفر فوراً بدل نافذة فارغة، ثم استبدله
+      // بالـframe الدقيق المطلوب بمجرد وصوله من الكاش/المشغل المخفي.
+      final nearest = _nearestMemoryPreview(bucket);
+      if (mounted) setState(() => _previewBytes = nearest);
+      unawaited(_loadDiskPreviewForCurrentTarget(bucket));
     }
 
     _pendingPreviewTarget = target;
     _schedulePreviewCapture();
+  }
+
+  Future<void> _loadDiskPreviewForCurrentTarget(int bucket) async {
+    final bytes = await _readPreviewFromDisk(bucket);
+    if (!mounted || !_scrubbing || bytes == null) return;
+    if (_previewBucketFor(_previewPosition) != bucket) return;
+    setState(() => _previewBytes = bytes);
   }
 
   void _schedulePreviewCapture() {
@@ -479,18 +1062,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final sinceLast = _lastPreviewCaptureAt == null
         ? 999
         : now.difference(_lastPreviewCaptureAt!).inMilliseconds;
-    final waitMs = (90 - sinceLast).clamp(0, 90).toInt();
+    final waitMs = (35 - sinceLast).clamp(0, 35).toInt();
     _previewTimer = Timer(Duration(milliseconds: waitMs), _drainPreviewCapture);
   }
 
   Future<void> _drainPreviewCapture() async {
     if (!_scrubbing || _previewCaptureBusy) return;
-    final target = _pendingPreviewTarget;
-    if (target == null) return;
+    final requestedTarget = _pendingPreviewTarget;
+    if (requestedTarget == null) return;
     _pendingPreviewTarget = null;
     _previewCaptureBusy = true;
     final generation = _previewGeneration;
-    final bucket = target.inSeconds ~/ 4;
+    final bucket = _previewBucketFor(requestedTarget);
+    final target = _previewTimeForBucket(bucket);
 
     try {
       final cached = _previewCache.remove(bucket);
@@ -499,8 +1083,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         if (mounted &&
             _scrubbing &&
             generation == _previewGeneration &&
-            (_previewPosition.inSeconds ~/ 4) == bucket) {
+            _previewBucketFor(_previewPosition) == bucket) {
           setState(() => _previewBytes = cached);
+        }
+        return;
+      }
+
+      final disk = await _readPreviewFromDisk(bucket);
+      if (disk != null) {
+        if (mounted &&
+            _scrubbing &&
+            generation == _previewGeneration &&
+            _previewBucketFor(_previewPosition) == bucket) {
+          setState(() => _previewBytes = disk);
         }
         return;
       }
@@ -512,20 +1107,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         return;
       }
 
-      await previewPlayer.seek(target);
-      await Future<void>.delayed(const Duration(milliseconds: 42));
+      final bytes = await _capturePreviewFrame(previewPlayer, target);
       if (!_scrubbing || generation != _previewGeneration) return;
-      final bytes = await previewPlayer.screenshot(format: 'image/jpeg');
       if (bytes == null || bytes.isEmpty) return;
 
-      _previewCache[bucket] = bytes;
-      while (_previewCache.length > _previewCacheLimit) {
-        _previewCache.remove(_previewCache.keys.first);
-      }
+      _rememberPreview(bucket, bytes);
+      unawaited(_writePreviewToDisk(bucket, bytes));
       if (mounted &&
           _scrubbing &&
           generation == _previewGeneration &&
-          (_previewPosition.inSeconds ~/ 4) == bucket) {
+          _previewBucketFor(_previewPosition) == bucket) {
         setState(() => _previewBytes = bytes);
       }
     } catch (_) {
@@ -553,16 +1144,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       });
     }
     _previewDisposeTimer?.cancel();
-    _previewDisposeTimer = Timer(const Duration(seconds: 5), () async {
-      final player = _previewPlayer;
-      _previewPlayer = null;
-      _previewReady = false;
-      if (player != null) {
-        try {
-          await player.dispose();
-        } catch (_) {}
-      }
-    });
+    // نبقي مشغل المعاينة مجهزاً طوال جلسة المشاهدة. التخلص منه بعد 12 ثانية
+    // كان يجعل أول Thumbnail بعد كل فترة انتظار بطيئاً جداً.
+    unawaited(_startPreviewWarmup());
     _handleNearEnd(target);
     _scheduleHide();
   }
@@ -706,7 +1290,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _durationSub?.cancel();
     _bufferingSub?.cancel();
     _persistProgress();
+    _previewWarmupStopRequested = true;
+    _previewWarmupGeneration++;
+    _previewController = null;
+    _previewWarmupController = null;
     _previewPlayer?.dispose();
+    _previewWarmupPlayer?.dispose();
     _player.dispose();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -764,12 +1353,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                 ),
               ),
             ),
-            if (_loading || _switchingSource)
-              _PlayerLoadingOverlay(
-                label: _switchingSource
-                    ? 'جاري تبديل الجودة بدون فقدان موضعك…'
-                    : 'جاري تجهيز المشاهدة…',
-              )
+            if (_switchingSource && _sourceSwitchFrame != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Image.memory(
+                    _sourceSwitchFrame!,
+                    fit: _videoFit,
+                    gaplessPlayback: true,
+                  ),
+                ),
+              ),
+            if (_loading)
+              const _PlayerLoadingOverlay(label: 'جاري تجهيز المشاهدة…')
+            else if (_switchingSource)
+              const _QualitySwitchHint()
             else if (_buffering && _error == null)
               const _PlayerBufferingHint(),
             if (_error != null) _ErrorOverlay(onRetry: _retry),
@@ -975,9 +1572,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               scrubbing: _scrubbing,
               previewBytes: _previewBytes,
               previewPosition: _previewPosition,
-              fallback: widget.media.backdropUrl.isNotEmpty
-                  ? widget.media.backdropUrl
-                  : widget.media.posterUrl,
               onChanged: _previewAt,
               onChangeEnd: _finishScrub,
             ),
@@ -1166,14 +1760,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 }
 
-class _ProgressScrubber extends StatelessWidget {
+class _ProgressScrubber extends StatefulWidget {
   const _ProgressScrubber({
     required this.position,
     required this.duration,
     required this.scrubbing,
     required this.previewBytes,
     required this.previewPosition,
-    required this.fallback,
     required this.onChanged,
     required this.onChangeEnd,
   });
@@ -1183,20 +1776,46 @@ class _ProgressScrubber extends StatelessWidget {
   final Duration previewPosition;
   final bool scrubbing;
   final Uint8List? previewBytes;
-  final String fallback;
   final ValueChanged<double> onChanged;
   final ValueChanged<double> onChangeEnd;
 
   @override
+  State<_ProgressScrubber> createState() => _ProgressScrubberState();
+}
+
+class _ProgressScrubberState extends State<_ProgressScrubber> {
+  double _lastDragValue = 0;
+  bool _dragging = false;
+
+  double _valueFromDx(double dx, double width) {
+    if (width <= 0) return 0;
+    final ratio = (dx / width).clamp(0.0, 1.0).toDouble();
+    final maxMs = widget.duration.inMilliseconds > 0
+        ? widget.duration.inMilliseconds.toDouble()
+        : 1.0;
+    return ratio * maxMs;
+  }
+
+  void _updateFromDx(double dx, double width) {
+    final value = _valueFromDx(dx, width);
+    _lastDragValue = value;
+    widget.onChanged(value);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final maxMs =
-        duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0;
-    final value = position.inMilliseconds.clamp(0, maxMs.toInt()).toDouble();
+    final maxMs = widget.duration.inMilliseconds > 0
+        ? widget.duration.inMilliseconds.toDouble()
+        : 1.0;
+    final value = widget.position.inMilliseconds
+        .clamp(0, maxMs.toInt())
+        .toDouble();
     final ratio = (value / maxMs).clamp(0.0, 1.0).toDouble();
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
-      height: scrubbing ? 146 : 38,
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOutCubic,
+      height: widget.scrubbing ? 146 : 42,
       child: LayoutBuilder(
         builder: (context, constraints) {
           const previewWidth = 184.0;
@@ -1208,50 +1827,111 @@ class _ProgressScrubber extends StatelessWidget {
               .clamp(0.0, maxLeft)
               .toDouble();
 
-          return Stack(
-            clipBehavior: Clip.none,
-            children: [
-              if (scrubbing)
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) {
+              _dragging = true;
+              _updateFromDx(details.localPosition.dx, constraints.maxWidth);
+            },
+            onTapUp: (details) {
+              _updateFromDx(details.localPosition.dx, constraints.maxWidth);
+              _dragging = false;
+              widget.onChangeEnd(_lastDragValue);
+            },
+            onTapCancel: () => _dragging = false,
+            onHorizontalDragStart: (details) {
+              _dragging = true;
+              _updateFromDx(details.localPosition.dx, constraints.maxWidth);
+            },
+            onHorizontalDragUpdate: (details) {
+              // نعتمد موقع الإصبع مباشرة، وليس delta، لذلك لا يمكن للدائرة أن "تتجمد".
+              _updateFromDx(details.localPosition.dx, constraints.maxWidth);
+            },
+            onHorizontalDragEnd: (_) {
+              if (!_dragging) return;
+              _dragging = false;
+              widget.onChangeEnd(_lastDragValue);
+            },
+            onHorizontalDragCancel: () {
+              if (!_dragging) return;
+              _dragging = false;
+              widget.onChangeEnd(_lastDragValue);
+            },
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                if (widget.scrubbing)
+                  Positioned(
+                    left: left,
+                    top: 0,
+                    child: _SeekPreview(
+                      bytes: widget.previewBytes,
+                      position: widget.previewPosition,
+                    ),
+                  ),
                 Positioned(
-                  left: left,
-                  top: 0,
-                  child: _SeekPreview(
-                    bytes: previewBytes,
-                    position: previewPosition,
-                    fallback: fallback,
+                  left: 0,
+                  right: 0,
+                  bottom: 8,
+                  height: 28,
+                  child: Stack(
+                    alignment: Alignment.centerLeft,
+                    children: [
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(.24),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        left: 0,
+                        width: constraints.maxWidth * ratio,
+                        child: Container(
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        left: (thumbX - (widget.scrubbing ? 8 : 6.5))
+                            .clamp(
+                              0.0,
+                              (constraints.maxWidth -
+                                      (widget.scrubbing ? 16 : 13))
+                                  .clamp(0.0, double.infinity)
+                                  .toDouble(),
+                            )
+                            .toDouble(),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 100),
+                          width: widget.scrubbing ? 16 : 13,
+                          height: widget.scrubbing ? 16 : 13,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: widget.scrubbing
+                                ? const [
+                                    BoxShadow(
+                                      color: Colors.black45,
+                                      blurRadius: 8,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: Directionality(
-                  // مهم: التطبيق RTL لكن قيمة الفيديو زمنية من اليسار إلى اليمين.
-                  // هذا يمنع انعكاس الصورة المصغرة والدائرة أثناء السحب.
-                  textDirection: TextDirection.ltr,
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 3.5,
-                      thumbShape:
-                          const RoundSliderThumbShape(enabledThumbRadius: 6.5),
-                      overlayShape:
-                          const RoundSliderOverlayShape(overlayRadius: 16),
-                      activeTrackColor: Colors.white,
-                      thumbColor: Colors.white,
-                      inactiveTrackColor: Colors.white24,
-                      overlayColor: AppColors.redBright.withOpacity(.14),
-                    ),
-                    child: Slider(
-                      min: 0,
-                      max: maxMs,
-                      value: value,
-                      onChanged: onChanged,
-                      onChangeEnd: onChangeEnd,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           );
         },
       ),
@@ -1263,19 +1943,17 @@ class _SeekPreview extends StatelessWidget {
   const _SeekPreview({
     required this.bytes,
     required this.position,
-    required this.fallback,
   });
 
   final Uint8List? bytes;
   final Duration position;
-  final String fallback;
 
   @override
   Widget build(BuildContext context) => Container(
         width: 184,
         height: 110,
         decoration: BoxDecoration(
-          color: Colors.black,
+          color: const Color(0xFF0C0C0C),
           borderRadius: BorderRadius.circular(15),
           border: Border.all(color: Colors.white.withOpacity(.22)),
           boxShadow: const [
@@ -1288,8 +1966,6 @@ class _SeekPreview extends StatelessWidget {
           children: [
             if (bytes != null)
               Image.memory(bytes!, fit: BoxFit.cover, gaplessPlayback: true)
-            else if (fallback.isNotEmpty)
-              CinematyNetworkImage(url: fallback)
             else
               const CinematyShimmer(
                 child: ColoredBox(color: Color(0xFF111111)),
@@ -1501,6 +2177,32 @@ class _PlayerLoadingOverlay extends StatelessWidget {
               const SizedBox(height: 12),
               const SkeletonBox(height: 4, radius: 8),
             ],
+          ),
+        ),
+      );
+}
+
+class _QualitySwitchHint extends StatelessWidget {
+  const _QualitySwitchHint();
+
+  @override
+  Widget build(BuildContext context) => Align(
+        alignment: Alignment.bottomCenter,
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 72),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(.48),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white.withOpacity(.08)),
+              ),
+              child: const Text(
+                'جاري تبديل الجودة • نفس موضع المشاهدة',
+                style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700),
+              ),
+            ),
           ),
         ),
       );

@@ -46,9 +46,9 @@ class MediaItem {
     return MediaItem(
       id: id,
       title: JsonUtils.string(json, [
-        'custom_ar_title', 'ar_title', 'lang_ar_title', 'display_name', 'title', 'en_title',
+        'custom_ar_title', 'ar_title', 'lang_ar_title', 'arTitle', 'display_name', 'title', 'en_title', 'enTitle',
       ], fallback: 'بدون عنوان'),
-      description: JsonUtils.string(json, ['ar_content', 'description', 'plot', 'overview', 'en_content']),
+      description: JsonUtils.string(json, ['ar_content', 'arContent', 'description', 'plot', 'overview', 'en_content', 'enContent']),
       posterUrl: normalizeMediaUrl(poster),
       backdropUrl: normalizeMediaUrl(backdrop),
       year: JsonUtils.integer(json, ['year']),

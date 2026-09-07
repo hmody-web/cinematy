@@ -12,8 +12,13 @@ import '../details/details_screen.dart';
 import '../library/library_screen.dart';
 
 class CategoryScreen extends ConsumerStatefulWidget {
-  const CategoryScreen({super.key, required this.category});
+  const CategoryScreen({
+    super.key,
+    required this.category,
+    this.initialItems = const <MediaItem>[],
+  });
   final MediaCategory category;
+  final List<MediaItem> initialItems;
 
   @override
   ConsumerState<CategoryScreen> createState() => _CategoryScreenState();
@@ -31,11 +36,26 @@ class _CategoryScreenState extends ConsumerState<CategoryScreen> {
   void initState() {
     super.initState();
     _controller.addListener(_listen);
-    _load();
+
+    // كرت التصنيف يمرر نفس قائمة الأفلام التي كان يعرض أغلفتها.
+    // بذلك أول Frame داخل التصنيف يحتوي الأفلام مباشرة ولا توجد أي رحلة API.
+    final cached = widget.initialItems.isNotEmpty
+        ? widget.initialItems
+        : ref.read(apiProvider).categoryCachedVideos(widget.category.id);
+    if (cached.isNotEmpty) {
+      _items.addAll(cached);
+      _loading = false;
+      _page = 2;
+    } else {
+      // نفس endpoint الخاص بتطبيق Cinemana؛ إذا كان prefetch بالخلفية قد بدأ
+      // للتو فسيستفيد من cache الذاكرة، وإلا يجلب الصفحة الأولى مباشرة.
+      _load();
+    }
   }
 
   void _listen() {
     if (_controller.hasClients &&
+        _controller.offset > 24 &&
         _controller.position.extentAfter < 650 &&
         !_loading &&
         _more) {

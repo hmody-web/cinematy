@@ -11,11 +11,13 @@ class CinematyNetworkImage extends StatelessWidget {
     required this.url,
     this.fit = BoxFit.cover,
     this.borderRadius = BorderRadius.zero,
+    this.memCacheWidth = 900,
   });
 
   final String url;
   final BoxFit fit;
   final BorderRadius borderRadius;
+  final int memCacheWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -27,9 +29,10 @@ class CinematyNetworkImage extends StatelessWidget {
               imageUrl: url,
               cacheManager: CinematyImageCacheManager.instance,
               fit: fit,
-              fadeInDuration: const Duration(milliseconds: 210),
-              fadeOutDuration: const Duration(milliseconds: 80),
-              memCacheWidth: 900,
+              // لا نؤخر ظهور الصورة بأنيميشن fade بعد اكتمال التنزيل.
+              fadeInDuration: Duration.zero,
+              fadeOutDuration: Duration.zero,
+              memCacheWidth: memCacheWidth,
               placeholder: (_, __) => const _Placeholder(loading: true),
               errorWidget: (_, __, ___) => const _Placeholder(),
             ),

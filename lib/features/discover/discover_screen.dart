@@ -40,24 +40,24 @@ class DiscoverScreen extends ConsumerWidget {
           title: 'تعذر جلب التصنيفات',
           onRetry: () => ref.invalidate(categoriesProvider),
         ),
-        data: (items) => items.isEmpty
-            ? const EmptyState(title: 'لا توجد تصنيفات حالياً')
-            : GridView.builder(
-                key: const PageStorageKey('discover-scroll'),
-                padding: const EdgeInsets.fromLTRB(18, 14, 18, 130),
-                cacheExtent: 750,
-                itemCount: items.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                  childAspectRatio: 1.36,
-                ),
-                itemBuilder: (_, i) => _CategoryMosaicCard(
-                  category: items[i],
-                  seed: i,
-                ),
-              ),
+        data: (items) {
+          if (items.isEmpty) {
+            return const EmptyState(title: 'لا توجد تصنيفات حالياً');
+          }
+          return GridView.builder(
+            key: const PageStorageKey('discover-scroll'),
+            padding: const EdgeInsets.fromLTRB(18, 14, 18, 130),
+            cacheExtent: 1800,
+            itemCount: items.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.36,
+            ),
+            itemBuilder: (_, i) => _CategoryMosaicCard(category: items[i], seed: i),
+          );
+        },
       ),
     );
   }
@@ -87,14 +87,23 @@ class _CategoryMosaicCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final preview = ref.watch(
-      categoryPreviewProvider((id: category.id, title: category.title)),
-    );
-    final items = preview.asData?.value ?? const <MediaItem>[];
+    // لا يوجد أي طلب شبكة خاص بالكرت. غلافه يأتي مباشرة من /categories مثل
+    // تطبيق Cinemana الأصلي، لذلك يظهر فور وصول قائمة التصنيفات.
+    final cachedItems = ref.read(apiProvider).categoryCachedVideos(category.id);
+    final posterItems = cachedItems
+        .where((e) => e.posterUrl.trim().isNotEmpty)
+        .take(6)
+        .toList(growable: false);
+
     return InkWell(
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => CategoryScreen(category: category)),
-      ),
+      onTap: () {
+        final ready = ref.read(apiProvider).categoryCachedVideos(category.id);
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => CategoryScreen(category: category, initialItems: ready),
+          ),
+        );
+      },
       borderRadius: BorderRadius.circular(26),
       child: Ink(
         decoration: BoxDecoration(
@@ -102,11 +111,7 @@ class _CategoryMosaicCard extends ConsumerWidget {
           borderRadius: BorderRadius.circular(26),
           border: Border.all(color: Colors.white.withOpacity(.07)),
           boxShadow: const [
-            BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 22,
-              offset: Offset(0, 10),
-            ),
+            BoxShadow(color: Color(0x33000000), blurRadius: 22, offset: Offset(0, 10)),
           ],
         ),
         child: ClipRRect(
@@ -114,12 +119,10 @@ class _CategoryMosaicCard extends ConsumerWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (preview.isLoading)
-                const CinematyShimmer(
-                  child: ColoredBox(color: AppColors.surfaceHigh),
-                )
-              else if (items.isNotEmpty)
-                _ScatteredPosterMosaic(items: items, seed: seed)
+              if (posterItems.length >= 3)
+                _ScatteredPosterMosaic(items: posterItems, seed: seed)
+              else if (category.coverUrl.isNotEmpty)
+                CinematyNetworkImage(url: category.coverUrl, memCacheWidth: 560)
               else
                 const DecoratedBox(
                   decoration: BoxDecoration(
@@ -136,11 +139,7 @@ class _CategoryMosaicCard extends ConsumerWidget {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     stops: [0, .40, 1],
-                    colors: [
-                      Color(0x18000000),
-                      Color(0x52000000),
-                      Color(0xEC070505),
-                    ],
+                    colors: [Color(0x12000000), Color(0x50000000), Color(0xEE070505)],
                   ),
                 ),
               ),
@@ -148,33 +147,16 @@ class _CategoryMosaicCard extends ConsumerWidget {
                 right: 15,
                 left: 15,
                 bottom: 13,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      category.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 18,
-                        height: 1.05,
-                        shadows: [Shadow(color: Colors.black, blurRadius: 8)],
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      category.count > 0
-                          ? '${category.count} عمل'
-                          : 'استكشف المحتوى',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.60),
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  category.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    height: 1.05,
+                    shadows: [Shadow(color: Colors.black, blurRadius: 8)],
+                  ),
                 ),
               ),
             ],
@@ -222,16 +204,9 @@ class _ScatteredPosterMosaic extends StatelessWidget {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: Colors.white.withOpacity(.10)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(.35),
-                        blurRadius: 10,
-                        offset: const Offset(0, 5),
-                      ),
-                    ],
                   ),
                   clipBehavior: Clip.antiAlias,
-                  child: CinematyNetworkImage(url: at(i).posterUrl),
+                  child: CinematyNetworkImage(url: at(i).posterUrl, memCacheWidth: 300),
                 ),
               ),
             );

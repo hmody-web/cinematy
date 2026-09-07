@@ -10,33 +10,22 @@ workflows:
       cocoapods: default
 
     scripts:
-      - name: Prepare Flutter
+      - name: Prepare Flutter without replacing iOS native files
         script: |
           set -euo pipefail
           flutter config --no-enable-swift-package-manager
           flutter clean
           flutter pub get
 
-      - name: Rebuild clean iOS platform
-        script: |
-          set -euo pipefail
-
-          echo "Generating a clean iOS project from the installed Flutter template..."
-
-          rm -rf /tmp/cinematy_ios_template
-
-          flutter create \
-            --platforms=ios \
-            --org com.cinematy \
-            --project-name app \
-            /tmp/cinematy_ios_template
-
-          rm -rf ios
-          cp -R /tmp/cinematy_ios_template/ios ./ios
-
-          echo "Fresh iOS project installed."
-          test -f ios/Runner.xcodeproj/project.pbxproj
-          test -f ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
+          # CRITICAL: Never recreate/delete ios here. AppDelegate.swift contains
+          # Cinematy's native UITabBarController / Liquid Glass implementation.
+          test -f ios/Runner/AppDelegate.swift
+          grep -Fq 'CinematyNativeTabBarHostController' ios/Runner/AppDelegate.swift
+          grep -Fq 'cinematy/native_tab_bar' ios/Runner/AppDelegate.swift
+          if grep -Eq 'rm[[:space:]]+-rf[[:space:]]+ios' codemagic.yaml; then
+            echo 'ERROR: codemagic.yaml must not delete the custom ios directory.'
+            exit 1
+          fi
 
       - name: Apply Cinematy iOS settings
         script: |
@@ -45,48 +34,42 @@ workflows:
           PLIST="ios/Runner/Info.plist"
           PBX="ios/Runner.xcodeproj/project.pbxproj"
 
-          # App name
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName سينماتي" "$PLIST" \
             || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string سينماتي" "$PLIST"
 
           /usr/libexec/PlistBuddy -c "Set :CFBundleName cinematy" "$PLIST" \
             || /usr/libexec/PlistBuddy -c "Add :CFBundleName string cinematy" "$PLIST"
 
-          # Allow media endpoints that may still use HTTP.
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
 
-          # Portrait + landscape for the player.
           /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:2 string UIInterfaceOrientationLandscapeRight" "$PLIST"
 
-          # Ensure exact bundle id and iOS 15 minimum.
+          # Never opt the app into legacy visual compatibility; that would suppress
+          # the current system design on iOS 26+.
+          /usr/libexec/PlistBuddy -c "Delete :UIDesignRequiresCompatibility" "$PLIST" 2>/dev/null || true
+
           sed -i '' 's/com\.cinematy\.app/com.cinematy.app/g' "$PBX"
           perl -0pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBX"
 
-          echo "Bundle IDs found:"
-          grep -n "PRODUCT_BUNDLE_IDENTIFIER" "$PBX" || true
-          echo "Deployment targets:"
-          grep -n "IPHONEOS_DEPLOYMENT_TARGET" "$PBX" | head -20 || true
+          echo "Xcode used for native system UI:"
+          xcodebuild -version
 
-      - name: Regenerate Flutter iOS files and icon
+      - name: Regenerate Flutter generated files and icon
         script: |
           set -euo pipefail
-
           flutter pub get
-
-          # Generate Cinematy app icon from the existing project asset.
           dart run flutter_launcher_icons
+          flutter build ios --release --config-only --no-codesign
 
-          # Prepare Generated.xcconfig and Flutter iOS build files only.
-          flutter build ios \
-            --release \
-            --config-only \
-            --no-codesign
+          # flutter build must not overwrite the native host.
+          grep -Fq 'CinematyNativeTabBarHostController' ios/Runner/AppDelegate.swift
+          grep -Fq 'cinematy/native_tab_bar' ios/Runner/AppDelegate.swift
 
       - name: Install CocoaPods
         script: |
@@ -98,17 +81,13 @@ workflows:
       - name: Verify Xcode project
         script: |
           set -euo pipefail
-
-          echo "Schemes:"
           xcodebuild -workspace ios/Runner.xcworkspace -list
-
           test -f ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
           test -f ios/Runner.xcodeproj/project.pbxproj
 
       - name: Build unsigned Release
         script: |
           set -euo pipefail
-
           rm -rf build/ios/derived
 
           xcodebuild \
@@ -127,7 +106,7 @@ workflows:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-      - name: Verify built app
+      - name: Verify built app contains native iOS tab bar
         script: |
           set -euo pipefail
 
@@ -139,40 +118,33 @@ workflows:
 
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: No Release Runner.app was generated."
-            find build/ios/derived/Build/Products -maxdepth 5 -print || true
             exit 1
           fi
 
           echo "$APP_PATH" > /tmp/cinematy_runner_app
-
-          echo "Runner.app:"
-          echo "$APP_PATH"
-          du -sh "$APP_PATH"
-          ls -lah "$APP_PATH"
-
           test -f "$APP_PATH/Info.plist"
           test -f "$APP_PATH/Runner"
 
-          EXEC_SIZE=$(stat -f%z "$APP_PATH/Runner")
-          APP_KB=$(du -sk "$APP_PATH" | awk '{print $1}')
-
-          echo "Runner executable bytes: $EXEC_SIZE"
-          echo "Runner.app KB: $APP_KB"
-
-          if [ "$EXEC_SIZE" -lt 100000 ]; then
-            echo "ERROR: Runner executable is unexpectedly small."
+          # This verifies the final executable — not just source files — contains
+          # the exact native MethodChannel compiled from AppDelegate.swift.
+          if ! strings "$APP_PATH/Runner" | grep -Fq 'cinematy/native_tab_bar'; then
+            echo "ERROR: Native Cinematy iOS tab bar code is NOT inside Runner executable."
             exit 1
           fi
 
-          if [ "$APP_KB" -lt 2048 ]; then
-            echo "ERROR: Runner.app is unexpectedly small."
+          if strings "$APP_PATH/Runner" | grep -Fq 'cinematy.native.liquid.tabbar'; then
+            echo "Native UITabBarController marker found in final Runner executable."
+          else
+            echo "ERROR: Native Liquid tab bar marker missing from final executable."
             exit 1
           fi
+
+          echo "Native iOS tab bar verification PASSED."
+          du -sh "$APP_PATH"
 
       - name: Create unsigned ZIP
         script: |
           set -euo pipefail
-
           APP_PATH=$(cat /tmp/cinematy_runner_app)
 
           rm -rf build/ios/output
@@ -187,20 +159,14 @@ workflows:
             build/ios/output/Cinematy-Release-Unsigned.zip
 
           ZIP="build/ios/output/Cinematy-Release-Unsigned.zip"
-
-          echo "Final ZIP:"
           ls -lh "$ZIP"
+          unzip -t "$ZIP"
 
           ZIP_BYTES=$(stat -f%z "$ZIP")
-          echo "ZIP bytes: $ZIP_BYTES"
-
           if [ "$ZIP_BYTES" -lt 1000000 ]; then
             echo "ERROR: Final ZIP is less than 1 MB."
             exit 1
           fi
-
-          echo "ZIP validation:"
-          unzip -t "$ZIP"
 
     artifacts:
       - build/ios/output/Cinematy-Release-Unsigned.zip
@@ -216,22 +182,16 @@ workflows:
       cocoapods: default
 
     scripts:
-      - name: Prepare clean iOS project
+      - name: Prepare existing iOS project
         script: |
           set -euo pipefail
           flutter config --no-enable-swift-package-manager
           flutter clean
           flutter pub get
 
-          rm -rf /tmp/cinematy_ios_template
-          flutter create \
-            --platforms=ios \
-            --org com.cinematy \
-            --project-name app \
-            /tmp/cinematy_ios_template
-
-          rm -rf ios
-          cp -R /tmp/cinematy_ios_template/ios ./ios
+          test -f ios/Runner/AppDelegate.swift
+          grep -Fq 'CinematyNativeTabBarHostController' ios/Runner/AppDelegate.swift
+          grep -Fq 'cinematy/native_tab_bar' ios/Runner/AppDelegate.swift
 
           PLIST="ios/Runner/Info.plist"
           PBX="ios/Runner.xcodeproj/project.pbxproj"
@@ -242,12 +202,14 @@ workflows:
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Delete :UIDesignRequiresCompatibility" "$PLIST" 2>/dev/null || true
 
           perl -0pi -e 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' "$PBX"
 
-          flutter pub get
           dart run flutter_launcher_icons
           flutter build ios --debug --config-only --no-codesign
+
+          grep -Fq 'CinematyNativeTabBarHostController' ios/Runner/AppDelegate.swift
 
           cd ios
           pod install --repo-update
@@ -256,7 +218,6 @@ workflows:
       - name: Build unsigned Debug
         script: |
           set -euo pipefail
-
           rm -rf build/ios/derived
 
           xcodebuild \
@@ -275,7 +236,7 @@ workflows:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-      - name: Package Debug ZIP
+      - name: Verify and package Debug ZIP
         script: |
           set -euo pipefail
 
@@ -293,7 +254,9 @@ workflows:
           test -f "$APP_PATH/Runner"
           test -f "$APP_PATH/Info.plist"
 
-          du -sh "$APP_PATH"
+          strings "$APP_PATH/Runner" | grep -Fq 'cinematy/native_tab_bar'
+          strings "$APP_PATH/Runner" | grep -Fq 'cinematy.native.liquid.tabbar'
+          echo "Native iOS tab bar verification PASSED."
 
           rm -rf build/ios/output
           mkdir -p build/ios/output

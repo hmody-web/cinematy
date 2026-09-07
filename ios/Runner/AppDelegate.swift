@@ -1,127 +1,122 @@
 import Flutter
 import UIKit
 
-@main
-@objc class AppDelegate: FlutterAppDelegate, UITabBarDelegate {
-  private var nativeTabBar: UITabBar?
-  private var nativeTabBarChannel: FlutterMethodChannel?
-  private var installAttempt = 0
-  private var isCompact = false
+/// Native iOS tab host for Cinematy.
+///
+/// The important detail is that this is a real UITabBarController. On iOS 26+
+/// UIKit gives UITabBarController the system Liquid Glass tab-bar appearance.
+/// Flutter stays as one persistent child above the tab controller's content,
+/// while the native tab bar remains owned & rendered by UIKit.
+final class CinematyNativeTabBarHostController: UITabBarController, UITabBarControllerDelegate {
+  private let flutterController: FlutterViewController
+  private var channel: FlutterMethodChannel?
+  private var compact = false
+  private var installedFlutterView = false
 
-  override func application(
-    _ application: UIApplication,
-    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
-  ) -> Bool {
-    GeneratedPluginRegistrant.register(with: self)
-    let launched = super.application(
-      application,
-      didFinishLaunchingWithOptions: launchOptions
-    )
-
-    // Install after Flutter's root view exists. If the storyboard/controller is
-    // still being attached, retry briefly on the main queue instead of silently
-    // ending up with an invisible tab bar.
-    installNativeTabBarWhenReady()
-    return launched
+  init(flutterController: FlutterViewController) {
+    self.flutterController = flutterController
+    super.init(nibName: nil, bundle: nil)
   }
 
-  private func installNativeTabBarWhenReady() {
-    DispatchQueue.main.async { [weak self] in
-      guard let self else { return }
-      if self.nativeTabBar != nil { return }
-
-      guard let controller = self.window?.rootViewController as? FlutterViewController else {
-        self.installAttempt += 1
-        guard self.installAttempt < 40 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-          self?.installNativeTabBarWhenReady()
-        }
-        return
-      }
-
-      self.installAttempt = 0
-      self.installNativeTabBar(on: controller)
-    }
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
   }
 
-  private func installNativeTabBar(on controller: FlutterViewController) {
-    guard nativeTabBar == nil else { return }
+  override func viewDidLoad() {
+    super.viewDidLoad()
 
-    let tabBar = UITabBar(frame: .zero)
-    tabBar.translatesAutoresizingMaskIntoConstraints = false
-    tabBar.delegate = self
+    view.backgroundColor = .black
+    delegate = self
+
+    configureSystemTabBar()
+    configureTabs()
+    installFlutterContentIfNeeded()
+    installChannel()
+
+    // Visible by default. Flutter may hide it only while a pushed route such
+    // as details/player is on top. This prevents a channel timing issue from
+    // ever leaving the main tab bar invisible.
+    tabBar.isHidden = false
+    tabBar.isUserInteractionEnabled = true
+    tabBar.alpha = 1
+    view.bringSubviewToFront(tabBar)
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    // Flutter can create/resize platform surfaces during rotation. Always keep
+    // UIKit's system tab bar as the top-most sibling.
+    view.bringSubviewToFront(tabBar)
+  }
+
+  private func configureSystemTabBar() {
     tabBar.isTranslucent = true
-    tabBar.clipsToBounds = false
-    tabBar.itemPositioning = .fill
+    tabBar.backgroundColor = nil
+    tabBar.barTintColor = nil
+    tabBar.backgroundImage = nil
+    tabBar.shadowImage = nil
+    tabBar.tintColor = UIColor(red: 0.96, green: 0.07, blue: 0.11, alpha: 1)
+    tabBar.unselectedItemTintColor = UIColor.secondaryLabel.withAlphaComponent(0.72)
     tabBar.semanticContentAttribute = .forceRightToLeft
-    tabBar.tintColor = UIColor(red: 0.96, green: 0.08, blue: 0.12, alpha: 1.0)
-    tabBar.unselectedItemTintColor = UIColor.secondaryLabel.withAlphaComponent(0.74)
-    tabBar.layer.zPosition = 9_999
-    tabBar.accessibilityIdentifier = "cinematy.native.tabbar"
+    tabBar.accessibilityIdentifier = "cinematy.native.liquid.tabbar"
 
-    // Do not paint a custom background or blur here. UIKit owns the bar's
-    // native material, so iOS versions that provide Liquid Glass render their
-    // real system style rather than a Flutter imitation.
+    // Deliberately DO NOT install a custom UITabBarAppearance background.
+    // UIKit's default appearance is what enables the native Liquid Glass
+    // treatment when the app runs on a system that supports it.
+  }
 
-    let items = [
-      makeItem(title: "الرئيسية", normal: "house", selected: "house.fill", tag: 0),
-      makeItem(title: "اكتشف", normal: "safari", selected: "safari.fill", tag: 1),
-      makeItem(title: "البحث", normal: "magnifyingglass", selected: "magnifyingglass", tag: 2),
-      makeItem(title: "مكتبتي", normal: "rectangle.stack", selected: "rectangle.stack.fill", tag: 3),
+  private func configureTabs() {
+    let definitions: [(String, String, String)] = [
+      ("الرئيسية", "house", "house.fill"),
+      ("اكتشف", "safari", "safari.fill"),
+      ("البحث", "magnifyingglass", "magnifyingglass"),
+      ("مكتبتي", "rectangle.stack", "rectangle.stack.fill"),
     ]
 
-    let selectedRed = UIColor(red: 0.96, green: 0.08, blue: 0.12, alpha: 1.0)
-    let normalAttributes: [NSAttributedString.Key: Any] = [
-      .foregroundColor: UIColor.secondaryLabel.withAlphaComponent(0.74),
-      .font: UIFont.systemFont(ofSize: 10, weight: .medium),
-    ]
-    let selectedAttributes: [NSAttributedString.Key: Any] = [
-      .foregroundColor: selectedRed,
-      .font: UIFont.systemFont(ofSize: 10, weight: .semibold),
-    ]
-
-    for item in items {
-      item.setTitleTextAttributes(normalAttributes, for: .normal)
-      item.setTitleTextAttributes(selectedAttributes, for: .selected)
+    let controllers: [UIViewController] = definitions.enumerated().map { index, definition in
+      let controller = UIViewController()
+      controller.view.backgroundColor = .clear
+      controller.tabBarItem = UITabBarItem(
+        title: definition.0,
+        image: UIImage(systemName: definition.1),
+        selectedImage: UIImage(systemName: definition.2)
+      )
+      controller.tabBarItem.tag = index
+      return controller
     }
 
-    tabBar.items = items
-    tabBar.selectedItem = items[0]
+    setViewControllers(controllers, animated: false)
+    selectedIndex = 0
+  }
 
-    controller.view.addSubview(tabBar)
+  private func installFlutterContentIfNeeded() {
+    guard !installedFlutterView else { return }
+    installedFlutterView = true
 
-    // 49 pt is UIKit's standard tab-bar content height. Pinning its top to
-    // safeArea.bottom - 49 and its bottom to the physical screen bottom makes
-    // the bar automatically include the home-indicator area on every iPhone.
+    // Flutter is not one of the managed tab controllers. It is a persistent
+    // content child, while the native UITabBarController owns only selection
+    // chrome. Changing a tab therefore keeps one Flutter engine/state alive.
+    addChild(flutterController)
+    flutterController.view.translatesAutoresizingMaskIntoConstraints = false
+    view.insertSubview(flutterController.view, belowSubview: tabBar)
     NSLayoutConstraint.activate([
-      tabBar.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor),
-      tabBar.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor),
-      tabBar.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor),
-      tabBar.topAnchor.constraint(
-        equalTo: controller.view.safeAreaLayoutGuide.bottomAnchor,
-        constant: -49
-      ),
+      flutterController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      flutterController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      flutterController.view.topAnchor.constraint(equalTo: view.topAnchor),
+      flutterController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ])
+    flutterController.didMove(toParent: self)
+  }
 
-    controller.view.bringSubviewToFront(tabBar)
-
-    // Stay hidden until the Flutter shell explicitly attaches. This prevents
-    // the native bar from covering splash/routes before CinematyShell is ready.
-    tabBar.isHidden = true
-    tabBar.isUserInteractionEnabled = false
-
-    let channel = FlutterMethodChannel(
+  private func installChannel() {
+    let methodChannel = FlutterMethodChannel(
       name: "cinematy/native_tab_bar",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: flutterController.binaryMessenger
     )
 
-    channel.setMethodCallHandler { [weak self, weak controller] call, result in
-      guard let self, let tabBar = self.nativeTabBar else {
-        result(FlutterError(
-          code: "native_tab_bar_unavailable",
-          message: "Native tab bar is not installed yet.",
-          details: nil
-        ))
+    methodChannel.setMethodCallHandler { [weak self] call, result in
+      guard let self else {
+        result(FlutterError(code: "native_tab_bar_gone", message: nil, details: nil))
         return
       }
 
@@ -130,25 +125,15 @@ import UIKit
         result(true)
 
       case "setIndex":
-        let index = Self.intValue(call.arguments)
-        self.setSelectedIndex(index ?? 0)
-        result(nil)
-
-      case "setCompact":
-        let compact = Self.boolValue(call.arguments)
-        self.setCompact(compact ?? false, animated: true)
+        self.setSelectedIndex(Self.intValue(call.arguments) ?? 0)
         result(nil)
 
       case "setVisible":
-        let visible = Self.boolValue(call.arguments) ?? false
-        tabBar.isHidden = !visible
-        tabBar.isUserInteractionEnabled = visible
-        if visible {
-          tabBar.alpha = 1.0
-          if let rootView = controller?.view {
-            rootView.bringSubviewToFront(tabBar)
-          }
-        }
+        self.setBarVisible(Self.boolValue(call.arguments) ?? true, animated: true)
+        result(nil)
+
+      case "setCompact":
+        self.setCompact(Self.boolValue(call.arguments) ?? false, animated: true)
         result(nil)
 
       default:
@@ -156,31 +141,79 @@ import UIKit
       }
     }
 
-    nativeTabBar = tabBar
-    nativeTabBarChannel = channel
+    channel = methodChannel
   }
 
-  func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-    nativeTabBarChannel?.invokeMethod("tabChanged", arguments: item.tag)
+  func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
+    let index = tabBarController.selectedIndex
+    channel?.invokeMethod("tabChanged", arguments: index)
+    view.bringSubviewToFront(tabBar)
   }
 
-  private func setSelectedIndex(_ index: Int) {
-    guard let tabBar = nativeTabBar,
-          let items = tabBar.items,
-          items.indices.contains(index) else { return }
-    tabBar.selectedItem = items[index]
+  private func setSelectedIndex(_ rawIndex: Int) {
+    guard let controllers = viewControllers, !controllers.isEmpty else { return }
+    let index = min(max(rawIndex, 0), controllers.count - 1)
+    if selectedIndex != index {
+      selectedIndex = index
+    }
+    view.bringSubviewToFront(tabBar)
   }
 
-  private func setCompact(_ compact: Bool, animated: Bool) {
-    guard let tabBar = nativeTabBar else { return }
-    guard compact != isCompact || !animated else { return }
-    isCompact = compact
+  private func setBarVisible(_ visible: Bool, animated: Bool) {
+    guard tabBar.isHidden == visible else {
+      if visible {
+        tabBar.isHidden = false
+        tabBar.isUserInteractionEnabled = true
+        tabBar.alpha = 0
+        view.bringSubviewToFront(tabBar)
+      }
 
+      let changes = {
+        self.tabBar.alpha = visible ? 1 : 0
+      }
+
+      let completion: (Bool) -> Void = { _ in
+        self.tabBar.isHidden = !visible
+        self.tabBar.isUserInteractionEnabled = visible
+        if visible {
+          self.tabBar.alpha = 1
+          self.view.bringSubviewToFront(self.tabBar)
+        }
+      }
+
+      if animated {
+        UIView.animate(
+          withDuration: 0.22,
+          delay: 0,
+          options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut],
+          animations: changes,
+          completion: completion
+        )
+      } else {
+        changes()
+        completion(true)
+      }
+      return
+    }
+
+    if visible {
+      tabBar.alpha = 1
+      tabBar.isUserInteractionEnabled = true
+      view.bringSubviewToFront(tabBar)
+    }
+  }
+
+  private func setCompact(_ value: Bool, animated: Bool) {
+    guard value != compact else { return }
+    compact = value
+
+    // On iOS 26+ the controller itself owns the modern tab bar. We keep this
+    // tiny scale only as the explicit Cinematy scroll response requested by
+    // the app, without replacing or drawing over the system glass material.
     let changes = {
-      tabBar.transform = compact
+      self.tabBar.transform = value
         ? CGAffineTransform(scaleX: 0.90, y: 0.90)
         : .identity
-      tabBar.alpha = compact ? 0.97 : 1.0
     }
 
     guard animated else {
@@ -189,28 +222,13 @@ import UIKit
     }
 
     UIView.animate(
-      withDuration: 0.32,
+      withDuration: 0.30,
       delay: 0,
-      usingSpringWithDamping: 0.84,
+      usingSpringWithDamping: 0.86,
       initialSpringVelocity: 0.18,
       options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut],
       animations: changes
     )
-  }
-
-  private func makeItem(
-    title: String,
-    normal: String,
-    selected: String,
-    tag: Int
-  ) -> UITabBarItem {
-    let item = UITabBarItem(
-      title: title,
-      image: UIImage(systemName: normal),
-      selectedImage: UIImage(systemName: selected)
-    )
-    item.tag = tag
-    return item
   }
 
   private static func intValue(_ value: Any?) -> Int? {
@@ -224,9 +242,83 @@ import UIKit
     if let number = value as? NSNumber { return number.boolValue }
     if let value = value as? Bool { return value }
     if let value = value as? String {
-      if value == "true" || value == "1" { return true }
-      if value == "false" || value == "0" { return false }
+      switch value.lowercased() {
+      case "true", "1", "yes": return true
+      case "false", "0", "no": return false
+      default: return nil
+      }
     }
+    return nil
+  }
+}
+
+@main
+@objc class AppDelegate: FlutterAppDelegate {
+  private var nativeTabHost: CinematyNativeTabBarHostController?
+  private var installAttempt = 0
+
+  override func application(
+    _ application: UIApplication,
+    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+  ) -> Bool {
+    GeneratedPluginRegistrant.register(with: self)
+    let launched = super.application(
+      application,
+      didFinishLaunchingWithOptions: launchOptions
+    )
+
+    installNativeTabHostWhenReady()
+    return launched
+  }
+
+  private func installNativeTabHostWhenReady() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      guard self.nativeTabHost == nil else { return }
+
+      guard let window = self.window,
+            let flutterController = Self.findFlutterController(in: window.rootViewController) else {
+        self.installAttempt += 1
+        if self.installAttempt < 80 {
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.installNativeTabHostWhenReady()
+          }
+        } else {
+          print("[CinematyTabBar] ERROR: FlutterViewController was not found; native tab host not installed")
+        }
+        return
+      }
+
+      self.installAttempt = 0
+      let host = CinematyNativeTabBarHostController(flutterController: flutterController)
+      self.nativeTabHost = host
+      window.rootViewController = host
+      window.makeKeyAndVisible()
+      host.loadViewIfNeeded()
+      print("[CinematyTabBar] Native UITabBarController installed")
+    }
+  }
+
+  private static func findFlutterController(in controller: UIViewController?) -> FlutterViewController? {
+    guard let controller else { return nil }
+    if let flutter = controller as? FlutterViewController { return flutter }
+
+    if let navigation = controller as? UINavigationController {
+      for child in navigation.viewControllers {
+        if let flutter = findFlutterController(in: child) { return flutter }
+      }
+    }
+
+    if let tab = controller as? UITabBarController {
+      for child in tab.viewControllers ?? [] {
+        if let flutter = findFlutterController(in: child) { return flutter }
+      }
+    }
+
+    for child in controller.children {
+      if let flutter = findFlutterController(in: child) { return flutter }
+    }
+
     return nil
   }
 }

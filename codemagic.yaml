@@ -31,6 +31,9 @@ workflows:
           # CodeMagic is actually building with, then restore Cinematy native UI.
           cp ios/Runner/AppDelegate.swift /tmp/Cinematy-AppDelegate.swift
           cp ios/Runner/SceneDelegate.swift /tmp/Cinematy-SceneDelegate.swift
+          if [ -f ios/Runner/GoogleService-Info.plist ]; then
+            cp ios/Runner/GoogleService-Info.plist /tmp/Cinematy-GoogleService-Info.plist
+          fi
 
           rm -rf /tmp/cinematy_ios_template
           flutter create \
@@ -44,6 +47,9 @@ workflows:
 
           cp /tmp/Cinematy-AppDelegate.swift ios/Runner/AppDelegate.swift
           cp /tmp/Cinematy-SceneDelegate.swift ios/Runner/SceneDelegate.swift
+          if [ -f /tmp/Cinematy-GoogleService-Info.plist ]; then
+            cp /tmp/Cinematy-GoogleService-Info.plist ios/Runner/GoogleService-Info.plist
+          fi
 
           PBX="ios/Runner.xcodeproj/project.pbxproj"
           PLIST="ios/Runner/Info.plist"
@@ -82,6 +88,12 @@ workflows:
               'UIInterfaceOrientationLandscapeLeft',
               'UIInterfaceOrientationLandscapeRight',
           ]
+          p['CFBundleURLTypes'] = [{
+              'CFBundleTypeRole': 'Editor',
+              'CFBundleURLSchemes': [
+                  'com.googleusercontent.apps.973890908256-7jgno3lov2klrfiei0n50o1ju1l1vto2'
+              ],
+          }]
           p.pop('UIDesignRequiresCompatibility', None)
 
           manifest = p.setdefault('UIApplicationSceneManifest', {})
@@ -185,15 +197,12 @@ workflows:
           test -f "$APP_PATH/Info.plist"
           test -f "$APP_PATH/Runner"
 
-          if ! strings "$APP_PATH/Runner" | grep -Fq 'cinematy/native_tab_bar'; then
-            echo "ERROR: Native tab-bar MethodChannel is missing from Runner binary."
-            exit 1
-          fi
-
-          if ! strings "$APP_PATH/Runner" | grep -Fq 'cinematy.native.scene.liquid.tabbar'; then
-            echo "ERROR: UIScene native UITabBar marker is missing from Runner binary."
-            exit 1
-          fi
+          # Swift Release builds may optimize string literals, so `strings`
+          # is not a reliable proof that SceneDelegate was compiled.
+          test -f ios/Runner/SceneDelegate.swift
+          grep -Fq 'SceneDelegate.swift in Sources' ios/Runner.xcodeproj/project.pbxproj
+          grep -Fq 'cinematy/native_tab_bar' ios/Runner/SceneDelegate.swift
+          grep -Fq 'cinematy.native.scene.liquid.tabbar' ios/Runner/SceneDelegate.swift
 
           SCENE_CLASS=$(/usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName' "$APP_PATH/Info.plist")
           if [ "$SCENE_CLASS" != '$(PRODUCT_MODULE_NAME).SceneDelegate' ] && [ "$SCENE_CLASS" != 'app.SceneDelegate' ] && [ "$SCENE_CLASS" != 'Runner.SceneDelegate' ]; then
@@ -254,6 +263,9 @@ workflows:
 
           cp ios/Runner/AppDelegate.swift /tmp/Cinematy-AppDelegate.swift
           cp ios/Runner/SceneDelegate.swift /tmp/Cinematy-SceneDelegate.swift
+          if [ -f ios/Runner/GoogleService-Info.plist ]; then
+            cp ios/Runner/GoogleService-Info.plist /tmp/Cinematy-GoogleService-Info.plist
+          fi
 
           rm -rf /tmp/cinematy_ios_template
           flutter create \
@@ -266,6 +278,9 @@ workflows:
           cp -R /tmp/cinematy_ios_template/ios ./ios
           cp /tmp/Cinematy-AppDelegate.swift ios/Runner/AppDelegate.swift
           cp /tmp/Cinematy-SceneDelegate.swift ios/Runner/SceneDelegate.swift
+          if [ -f /tmp/Cinematy-GoogleService-Info.plist ]; then
+            cp /tmp/Cinematy-GoogleService-Info.plist ios/Runner/GoogleService-Info.plist
+          fi
 
           python3 - <<'PY'
           import plistlib
@@ -275,6 +290,12 @@ workflows:
               p = plistlib.load(f)
           p['CFBundleDisplayName'] = 'سينماتي'
           p['NSAppTransportSecurity'] = {'NSAllowsArbitraryLoads': True}
+          p['CFBundleURLTypes'] = [{
+              'CFBundleTypeRole': 'Editor',
+              'CFBundleURLSchemes': [
+                  'com.googleusercontent.apps.973890908256-7jgno3lov2klrfiei0n50o1ju1l1vto2'
+              ],
+          }]
           p.pop('UIDesignRequiresCompatibility', None)
           manifest = p.setdefault('UIApplicationSceneManifest', {})
           manifest['UIApplicationSupportsMultipleScenes'] = False

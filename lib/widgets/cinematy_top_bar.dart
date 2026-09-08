@@ -1,8 +1,12 @@
 import 'dart:ui';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../features/auth/auth_service.dart';
+
 import '../core/theme/app_theme.dart';
+import 'app_notice.dart';
 import 'brand_logo.dart';
 
 class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
@@ -92,6 +96,8 @@ class CinematyTopBarContent extends StatelessWidget {
       child: Row(
         children: [
           if (showQuickActions) ...[
+            const _AccountQuickAction(),
+            const SizedBox(width: 8),
             _TopAction(
               icon: Icons.play_circle_outline_rounded,
               tooltip: 'متابعة المشاهدة',
@@ -154,6 +160,412 @@ class CinematyTopBarContent extends StatelessWidget {
   }
 }
 
+
+class _AccountQuickAction extends StatefulWidget {
+  const _AccountQuickAction();
+
+  @override
+  State<_AccountQuickAction> createState() => _AccountQuickActionState();
+}
+
+class _AccountQuickActionState extends State<_AccountQuickAction> {
+  final GlobalKey _anchorKey = GlobalKey();
+
+  Future<void> _openPopover(User? user) async {
+    final box = _anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final position = box.localToGlobal(Offset.zero);
+    final size = box.size;
+    if (!mounted) return;
+
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'الحساب',
+      barrierColor: Colors.black.withOpacity(.22),
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (dialogContext, _, __) {
+        final screen = MediaQuery.sizeOf(dialogContext);
+        const cardWidth = 306.0;
+        final maxLeft = (screen.width - cardWidth - 12).clamp(12.0, double.infinity).toDouble();
+        final left = (position.dx - 2).clamp(12.0, maxLeft).toDouble();
+        final arrowLeft = (position.dx + size.width / 2 - left - 7)
+            .clamp(18.0, cardWidth - 30)
+            .toDouble();
+        return Material(
+          color: Colors.transparent,
+          child: Stack(
+            children: [
+              Positioned(
+                top: position.dy + size.height + 7,
+                left: left,
+                width: cardWidth,
+                child: Directionality(
+                  textDirection: TextDirection.rtl,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: EdgeInsets.only(right: arrowLeft),
+                        child: Transform.rotate(
+                          angle: .785398,
+                          child: Container(
+                            width: 14,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF171719),
+                              border: Border(
+                                top: BorderSide(color: Colors.white.withOpacity(.09)),
+                                left: BorderSide(color: Colors.white.withOpacity(.09)),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Transform.translate(
+                        offset: const Offset(0, -7),
+                        child: _AccountPopoverBody(
+                          initialUser: user,
+                          rootContext: context,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+      transitionBuilder: (_, animation, __, child) => FadeTransition(
+        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+        child: ScaleTransition(
+          scale: Tween<double>(begin: .965, end: 1).animate(
+            CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+          ),
+          alignment: Alignment.topLeft,
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: AuthService.instance.authStateChanges,
+      initialData: AuthService.instance.currentUser,
+      builder: (context, snapshot) {
+        final user = snapshot.data;
+        final photo = user?.photoURL?.trim();
+        return Tooltip(
+          message: user == null ? 'تسجيل الدخول' : 'حسابي',
+          child: ClipRRect(
+            key: _anchorKey,
+            borderRadius: BorderRadius.circular(16),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Material(
+                color: Colors.white.withOpacity(.055),
+                child: InkWell(
+                  onTap: () => _openPopover(user),
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    padding: EdgeInsets.all(user == null ? 0 : 4),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: user == null
+                            ? Colors.white.withOpacity(.07)
+                            : AppColors.redBright.withOpacity(.22),
+                      ),
+                    ),
+                    child: user == null
+                        ? const Icon(Icons.person_outline_rounded, size: 22)
+                        : ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: photo?.isNotEmpty == true
+                                ? Image.network(
+                                    photo!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => const Icon(
+                                      Icons.person_rounded,
+                                      size: 22,
+                                    ),
+                                  )
+                                : const Icon(Icons.person_rounded, size: 22),
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AccountPopoverBody extends StatefulWidget {
+  const _AccountPopoverBody({
+    required this.initialUser,
+    required this.rootContext,
+  });
+
+  final User? initialUser;
+  final BuildContext rootContext;
+
+  @override
+  State<_AccountPopoverBody> createState() => _AccountPopoverBodyState();
+}
+
+class _AccountPopoverBodyState extends State<_AccountPopoverBody> {
+  bool _busy = false;
+
+  Future<void> _signIn() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final credential = await AuthService.instance.signInWithGoogle();
+      if (!mounted || credential == null) return;
+      AppNotice.show(
+        widget.rootContext,
+        title: 'تم تسجيل الدخول',
+        message: 'أهلاً ${credential.user?.displayName ?? ''}'.trim(),
+        type: AppNoticeType.success,
+      );
+    } on CinematyAuthException catch (error) {
+      if (!mounted) return;
+      AppNotice.show(
+        widget.rootContext,
+        title: 'تعذر تسجيل الدخول',
+        message: error.message,
+        type: AppNoticeType.error,
+        duration: const Duration(seconds: 5),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _signOut() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await AuthService.instance.signOut();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: AuthService.instance.authStateChanges,
+      initialData: widget.initialUser,
+      builder: (context, snapshot) {
+        final user = snapshot.data;
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF171719).withOpacity(.97),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withOpacity(.09)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(.35),
+                    blurRadius: 28,
+                    offset: const Offset(0, 12),
+                  ),
+                ],
+              ),
+              child: user == null ? _signedOut() : _signedIn(user),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _signedOut() => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: AppColors.redBright.withOpacity(.10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.person_outline_rounded, size: 22),
+              ),
+              const SizedBox(width: 11),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'حساب سينماتي',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'سجّل دخولك للوصول لميزاتك',
+                      style: TextStyle(fontSize: 10.5, color: Colors.white54),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 15),
+          FilledButton(
+            onPressed: _busy ? null : _signIn,
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black,
+              minimumSize: const Size.fromHeight(45),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            ),
+            child: _busy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('G', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                      SizedBox(width: 9),
+                      Text(
+                        'تسجيل الدخول بواسطة Google',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      );
+
+  Widget _signedIn(User user) {
+    final photo = user.photoURL?.trim();
+    final created = user.metadata.creationTime;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              padding: const EdgeInsets.all(1.5),
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [AppColors.redBright, Color(0xFFFF8A80)],
+                ),
+              ),
+              child: ClipOval(
+                child: ColoredBox(
+                  color: AppColors.surfaceHigh,
+                  child: photo?.isNotEmpty == true
+                      ? Image.network(photo!, fit: BoxFit.cover)
+                      : const Icon(Icons.person_rounded),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          user.displayName?.trim().isNotEmpty == true
+                              ? user.displayName!.trim()
+                              : 'حساب سينماتي',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                      const Icon(Icons.verified_rounded, size: 15, color: AppColors.success),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    user.email ?? 'حساب Google',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: Colors.white.withOpacity(.5), fontSize: 10.5),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.035),
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: Colors.white.withOpacity(.055)),
+          ),
+          child: Column(
+            children: [
+              _AccountInfoRow(label: 'الحالة', value: user.emailVerified ? 'موثّق' : 'متصل'),
+              if (created != null) ...[
+                const SizedBox(height: 7),
+                _AccountInfoRow(
+                  label: 'منذ',
+                  value: '${created.year}/${created.month}/${created.day}',
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 11),
+        TextButton.icon(
+          onPressed: _busy ? null : _signOut,
+          icon: const Icon(Icons.logout_rounded, size: 17),
+          label: const Text('تسجيل الخروج'),
+          style: TextButton.styleFrom(
+            foregroundColor: Colors.white60,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AccountInfoRow extends StatelessWidget {
+  const _AccountInfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+          const Spacer(),
+          Text(value, style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800)),
+        ],
+      );
+}
 
 class _BrandGlass extends StatelessWidget {
   const _BrandGlass({required this.progress, required this.child});

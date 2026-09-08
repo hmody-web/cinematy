@@ -21,12 +21,27 @@ class AppSettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(18, 12, 18, 36),
         children: [
+          Text(
+            'عام',
+            style: TextStyle(
+              color: Colors.white.withOpacity(.46),
+              fontSize: 11.5,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
           _SettingsCard(
             child: ListTile(
               leading: const _IconBox(Icons.language_rounded),
               title: const Text('اللغة', style: TextStyle(fontWeight: FontWeight.w900)),
               subtitle: const Text('العربية • اتجاه كامل من اليمين إلى اليسار'),
-              trailing: const Text('العربية', style: TextStyle(color: AppColors.redBright, fontWeight: FontWeight.w900)),
+              trailing: const Text(
+                'العربية',
+                style: TextStyle(
+                  color: AppColors.redBright,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -40,16 +55,33 @@ class AppSettingsScreen extends ConsumerWidget {
                   subtitle: Text('غيّر شكل الكتابة في كل واجهات سينماتي'),
                 ),
                 const Divider(height: 1),
-                ...AppSettingsStore.fonts.map((font) => RadioListTile<String>(
-                      value: font.family,
-                      groupValue: settings.fontFamily,
-                      title: Text(font.label, style: TextStyle(fontFamily: font.family, fontSize: 17, fontWeight: FontWeight.w700)),
-                      subtitle: Text('سينماتي • أفلام ومسلسلات', style: TextStyle(fontFamily: font.family, color: Colors.white54)),
-                      activeColor: AppColors.redBright,
-                      onChanged: (value) {
-                        if (value != null) ref.read(appSettingsProvider).setFontFamily(value);
-                      },
-                    )),
+                ...AppSettingsStore.fonts.map(
+                  (font) => RadioListTile<String>(
+                    value: font.family,
+                    groupValue: settings.fontFamily,
+                    title: Text(
+                      font.label,
+                      style: TextStyle(
+                        fontFamily: font.family,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    subtitle: Text(
+                      'سينماتي • أفلام ومسلسلات',
+                      style: TextStyle(
+                        fontFamily: font.family,
+                        color: Colors.white54,
+                      ),
+                    ),
+                    activeColor: AppColors.redBright,
+                    onChanged: (value) {
+                      if (value != null) {
+                        ref.read(appSettingsProvider).setFontFamily(value);
+                      }
+                    },
+                  ),
+                ),
               ],
             ),
           ),

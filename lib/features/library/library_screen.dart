@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -17,6 +18,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/media_card.dart';
 import '../../widgets/network_image.dart';
 import '../../widgets/section_header.dart';
+import '../auth/account_screen.dart';
 import '../details/details_screen.dart';
 import '../player/player_screen.dart';
 import 'app_settings_screen.dart';
@@ -67,6 +69,10 @@ class LibraryScreen extends ConsumerWidget {
           const SectionHeader(
             title: 'مكتبتي',
             subtitle: 'تنزيلاتك وقوائمك وإعدادات المشاهدة',
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(18, 0, 18, 8),
+            child: _LibraryAccountCard(),
           ),
           _LibraryQuickGrid(
             downloadsCount: downloads.items.length + downloads.activeItems.length,
@@ -293,6 +299,184 @@ class _DeveloperCard extends StatelessWidget {
             ),
           ),
         ),
+      );
+}
+
+class _LibraryAccountCard extends StatelessWidget {
+  const _LibraryAccountCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      initialData: FirebaseAuth.instance.currentUser,
+      builder: (context, snapshot) {
+        final user = snapshot.data;
+        final signedIn = user != null;
+        final name = user?.displayName?.trim();
+        final email = user?.email?.trim();
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AccountScreen()),
+            ),
+            borderRadius: BorderRadius.circular(28),
+            child: Ink(
+              padding: const EdgeInsets.fromLTRB(16, 15, 16, 15),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topRight,
+                  end: Alignment.bottomLeft,
+                  colors: [
+                    Colors.white.withOpacity(.062),
+                    AppColors.redBright.withOpacity(signedIn ? .045 : .075),
+                    Colors.white.withOpacity(.026),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: Colors.white.withOpacity(.075)),
+              ),
+              child: Row(
+                children: [
+                  _LibraryAccountAvatar(user: user),
+                  const SizedBox(width: 13),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                signedIn
+                                    ? (name?.isNotEmpty == true ? name! : 'حساب سينماتي')
+                                    : 'سجّل دخولك إلى سينماتي',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            if (signedIn) ...[
+                              const SizedBox(width: 6),
+                              const Icon(
+                                Icons.verified_rounded,
+                                size: 16,
+                                color: AppColors.success,
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          signedIn
+                              ? (email?.isNotEmpty == true
+                                  ? email!
+                                  : 'حساب Google متصل')
+                              : 'حسابك للمجموعات والمشاهدة الجماعية وميزاتك القادمة',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(.48),
+                            fontSize: 10.8,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: signedIn
+                          ? AppColors.success.withOpacity(.075)
+                          : AppColors.redBright.withOpacity(.09),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: signedIn
+                            ? AppColors.success.withOpacity(.16)
+                            : AppColors.redBright.withOpacity(.16),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          signedIn ? Icons.person_rounded : Icons.login_rounded,
+                          size: 14,
+                          color: signedIn ? AppColors.success : AppColors.redBright,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          signedIn ? 'ملفي' : 'دخول',
+                          style: TextStyle(
+                            color: signedIn ? AppColors.success : AppColors.redBright,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LibraryAccountAvatar extends StatelessWidget {
+  const _LibraryAccountAvatar({required this.user});
+
+  final User? user;
+
+  @override
+  Widget build(BuildContext context) {
+    final photo = user?.photoURL?.trim();
+    return Container(
+      width: 54,
+      height: 54,
+      padding: const EdgeInsets.all(1.5),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: user == null
+            ? null
+            : const LinearGradient(
+                colors: [AppColors.redBright, Color(0xFFFF8A80)],
+              ),
+        color: user == null ? Colors.white.withOpacity(.055) : null,
+        border: user == null
+            ? Border.all(color: Colors.white.withOpacity(.07))
+            : null,
+      ),
+      child: ClipOval(
+        child: ColoredBox(
+          color: AppColors.surfaceHigh,
+          child: photo?.isNotEmpty == true
+              ? Image.network(
+                  photo!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => _fallback(),
+                )
+              : _fallback(),
+        ),
+      ),
+    );
+  }
+
+  Widget _fallback() => Icon(
+        user == null ? Icons.person_outline_rounded : Icons.person_rounded,
+        size: 25,
+        color: Colors.white.withOpacity(.78),
       );
 }
 

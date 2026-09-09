@@ -8,6 +8,8 @@ class AppConfig {
   static const baseUrl = 'https://cinemana.shabakaty.cc';
   static const recommendationBaseUrl = 'https://recommend.shabakaty.cc';
   static const accountApiBaseUrl = 'https://scrptaty.com/apps/cinematy/api/';
+  static const realtimeDatabaseUrl =
+      'https://cinematy-app-default-rtdb.europe-west1.firebasedatabase.app';
 
   static const language = 'ar';
   static const requestTimeout = Duration(seconds: 15);

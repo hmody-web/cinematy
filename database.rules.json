@@ -1,0 +1,27 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "watch_party_sessions": {
+      "$sessionId": {
+        ".read": "auth != null && data.child('members').child(auth.uid).val() == true",
+        ".write": "auth != null && !data.exists() && newData.child('hostUid').val() == auth.uid && newData.child('members').child(auth.uid).val() == true",
+        "permissions": {
+          ".write": "auth != null && root.child('watch_party_sessions').child($sessionId).child('hostUid').val() == auth.uid"
+        },
+        "ended": {
+          ".write": "auth != null && root.child('watch_party_sessions').child($sessionId).child('hostUid').val() == auth.uid"
+        },
+        "state": {
+          ".write": "auth != null && root.child('watch_party_sessions').child($sessionId).child('members').child(auth.uid).val() == true && newData.child('sourceUid').val() == auth.uid && (root.child('watch_party_sessions').child($sessionId).child('hostUid').val() == auth.uid || (newData.child('action').val() == 'play' && root.child('watch_party_sessions').child($sessionId).child('permissions').child('everyoneCanPlayPause').val() == true) || (newData.child('action').val() == 'pause' && root.child('watch_party_sessions').child($sessionId).child('permissions').child('everyoneCanPlayPause').val() == true) || (newData.child('action').val() == 'seek' && root.child('watch_party_sessions').child($sessionId).child('permissions').child('everyoneCanSeek').val() == true) || (newData.child('action').val() == 'media' && root.child('watch_party_sessions').child($sessionId).child('permissions').child('everyoneCanChangeEpisode').val() == true) || (newData.child('action').val() == 'speed' && root.child('watch_party_sessions').child($sessionId).child('permissions').child('everyoneCanChangeSpeed').val() == true))"
+        },
+        "presence": {
+          "$uid": {
+            ".read": "auth != null && root.child('watch_party_sessions').child($sessionId).child('members').child(auth.uid).val() == true",
+            ".write": "auth != null && auth.uid == $uid && root.child('watch_party_sessions').child($sessionId).child('members').child(auth.uid).val() == true"
+          }
+        }
+      }
+    }
+  }
+}

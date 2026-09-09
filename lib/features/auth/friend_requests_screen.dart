@@ -5,6 +5,9 @@ import '../../data/models/friend_request.dart';
 import '../../data/services/cinematy_account_api.dart';
 import '../../widgets/app_notice.dart';
 import '../../widgets/cinematy_top_bar.dart';
+import '../player/player_screen.dart';
+import '../watch_party/watch_party_models.dart';
+import '../watch_party/watch_party_service.dart';
 import 'user_profile_screen.dart';
 
 class FriendRequestsScreen extends StatefulWidget {
@@ -18,6 +21,7 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
   List<FriendRequestItem> _requests = const [];
   bool _loading = true;
   final Set<int> _busy = <int>{};
+  final Set<String> _partyBusy = <String>{};
   String? _error;
 
   @override
@@ -76,6 +80,52 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
     }
   }
 
+  Future<void> _respondParty(WatchPartyInvite invite, bool accept) async {
+    if (_partyBusy.contains(invite.id)) return;
+    setState(() => _partyBusy.add(invite.id));
+    try {
+      if (!accept) {
+        await WatchPartyService.instance.declineInvite(invite);
+        if (!mounted) return;
+        AppNotice.show(
+          context,
+          title: 'تم رفض دعوة المشاهدة',
+          type: AppNoticeType.info,
+        );
+        return;
+      }
+
+      final session = await WatchPartyService.instance.acceptInvite(invite);
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PlayerScreen(
+            media: session.media,
+            watchPartySessionId: session.id,
+          ),
+        ),
+      );
+    } on WatchPartyException catch (error) {
+      if (!mounted) return;
+      AppNotice.show(
+        context,
+        title: 'تعذر فتح دعوة المشاهدة',
+        message: error.message,
+        type: AppNoticeType.error,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      AppNotice.show(
+        context,
+        title: 'تعذر فتح دعوة المشاهدة',
+        message: 'حاول مرة أخرى بعد قليل.',
+        type: AppNoticeType.error,
+      );
+    } finally {
+      if (mounted) setState(() => _partyBusy.remove(invite.id));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -84,15 +134,22 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
         showQuickActions: false,
         onBack: () => Navigator.pop(context, true),
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: _body(),
+      body: StreamBuilder<List<WatchPartyInvite>>(
+        stream: WatchPartyService.instance.pendingInvitesStream(),
+        initialData: const [],
+        builder: (context, partySnapshot) {
+          final invites = partySnapshot.data ?? const <WatchPartyInvite>[];
+          return RefreshIndicator(
+            onRefresh: _load,
+            child: _body(invites),
+          );
+        },
       ),
     );
   }
 
-  Widget _body() {
-    if (_loading && _requests.isEmpty) {
+  Widget _body(List<WatchPartyInvite> invites) {
+    if (_loading && _requests.isEmpty && invites.isEmpty) {
       return ListView(
         children: const [
           SizedBox(height: 180),
@@ -101,7 +158,7 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
       );
     }
 
-    if (_error != null && _requests.isEmpty) {
+    if (_error != null && _requests.isEmpty && invites.isEmpty) {
       return ListView(
         padding: const EdgeInsets.all(24),
         children: [
@@ -128,7 +185,7 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
       );
     }
 
-    if (_requests.isEmpty) {
+    if (_requests.isEmpty && invites.isEmpty) {
       return ListView(
         padding: const EdgeInsets.all(24),
         children: [
@@ -150,13 +207,13 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
           ),
           const SizedBox(height: 18),
           const Text(
-            'لا توجد طلبات صداقة جديدة',
+            'لا توجد إشعارات جديدة',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 6),
           Text(
-            'عند وصول طلب صداقة سيظهر هنا ويمكنك قبوله أو رفضه.',
+            'طلبات الصداقة ودعوات المشاهدة الجماعية ستظهر هنا.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withOpacity(.45),
@@ -168,29 +225,230 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
       );
     }
 
-    return ListView.separated(
+    return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
-      itemCount: _requests.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (_, index) {
-        final request = _requests[index];
-        return _RequestCard(
-          request: request,
-          busy: _busy.contains(request.id),
-          onAccept: () => _respond(request, true),
-          onReject: () => _respond(request, false),
-          onOpenProfile: () {
-            final handle = request.sender.handle;
-            if (handle == null || handle.isEmpty) return;
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => UserProfileScreen(handle: handle),
+      children: [
+        if (invites.isNotEmpty) ...[
+          const _NotificationSectionTitle(
+            icon: Icons.groups_2_rounded,
+            title: 'دعوات المشاهدة',
+          ),
+          const SizedBox(height: 9),
+          ...invites.map(
+            (invite) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _WatchPartyInviteCard(
+                invite: invite,
+                busy: _partyBusy.contains(invite.id),
+                onAccept: () => _respondParty(invite, true),
+                onReject: () => _respondParty(invite, false),
               ),
-            );
-          },
-        );
-      },
+            ),
+          ),
+          if (_requests.isNotEmpty) const SizedBox(height: 14),
+        ],
+        if (_requests.isNotEmpty) ...[
+          const _NotificationSectionTitle(
+            icon: Icons.person_add_alt_1_rounded,
+            title: 'طلبات الصداقة',
+          ),
+          const SizedBox(height: 9),
+          ..._requests.map(
+            (request) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _RequestCard(
+                request: request,
+                busy: _busy.contains(request.id),
+                onAccept: () => _respond(request, true),
+                onReject: () => _respond(request, false),
+                onOpenProfile: () {
+                  final handle = request.sender.handle;
+                  if (handle == null || handle.isEmpty) return;
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => UserProfileScreen(handle: handle),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _NotificationSectionTitle extends StatelessWidget {
+  const _NotificationSectionTitle({required this.icon, required this.title});
+  final IconData icon;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Icon(icon, size: 19, color: Colors.white.withOpacity(.72)),
+          const SizedBox(width: 7),
+          Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
+          ),
+        ],
+      );
+}
+
+class _WatchPartyInviteCard extends StatelessWidget {
+  const _WatchPartyInviteCard({
+    required this.invite,
+    required this.busy,
+    required this.onAccept,
+    required this.onReject,
+  });
+
+  final WatchPartyInvite invite;
+  final bool busy;
+  final VoidCallback onAccept;
+  final VoidCallback onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    final senderName = invite.from.displayName.isNotEmpty
+        ? invite.from.displayName
+        : 'صديقك';
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: AppColors.redBright.withOpacity(.055),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppColors.redBright.withOpacity(.15)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  _Avatar(url: invite.from.photoUrl),
+                  Positioned(
+                    left: -4,
+                    bottom: -4,
+                    child: Container(
+                      width: 25,
+                      height: 25,
+                      decoration: BoxDecoration(
+                        color: AppColors.redBright,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: const Color(0xFF120E0E), width: 2),
+                      ),
+                      child: const Icon(Icons.play_arrow_rounded, size: 16),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$senderName دعاك للمشاهدة',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      invite.media.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.56),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (invite.groupName?.trim().isNotEmpty == true) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'المجموعة: ${invite.groupName}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.38),
+                          fontSize: 10.2,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (invite.media.posterUrl.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    invite.media.posterUrl,
+                    width: 38,
+                    height: 50,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const SizedBox(width: 38),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: busy ? null : onAccept,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    minimumSize: const Size.fromHeight(44),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  icon: busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.play_arrow_rounded),
+                  label: const Text(
+                    'قبول ومشاهدة',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: busy ? null : onReject,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    minimumSize: const Size.fromHeight(44),
+                    side: BorderSide(color: Colors.white.withOpacity(.09)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: const Text(
+                    'رفض',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

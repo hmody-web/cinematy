@@ -269,6 +269,16 @@ class CinematyAccountApi {
         .toList();
   }
 
+  Future<List<CinematyUserProfile>> outgoingFriendRequests() async {
+    final payload = await _request('GET', '/friends/sent');
+    final rows = payload['users'];
+    if (rows is! List) return const [];
+    return rows
+        .whereType<Map>()
+        .map((e) => CinematyUserProfile.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
   List<MediaItem> _mediaList(dynamic rows) {
     if (rows is! List) return const [];
     final result = <MediaItem>[];

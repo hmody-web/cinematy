@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +17,8 @@ import '../../widgets/network_image.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/shimmer.dart';
 import '../player/player_screen.dart';
+import '../watch_party/watch_party_launcher_sheet.dart';
+import '../watch_party/watch_party_service.dart';
 import 'actor_screen.dart';
 
 class DetailsScreen extends ConsumerStatefulWidget {
@@ -98,6 +101,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                   downloadProgress: downloadProgress,
                   onBack: () => Navigator.pop(context),
                   onPlay: () => _play(media),
+                  onWatchParty: () => _startWatchParty(media),
                   onDownload: downloading || downloaded ? null : () => _showDownloadQuality(media),
                   onWatchLater: () {
                     ref.read(libraryProvider).toggleWatchLater(media);
@@ -199,6 +203,41 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _startWatchParty(MediaItem media) async {
+    if (FirebaseAuth.instance.currentUser == null) {
+      AppNotice.show(
+        context,
+        title: 'سجّل الدخول أولاً',
+        message: 'المشاهدة الجماعية مرتبطة بحسابك وأصدقائك ومجموعاتك.',
+        type: AppNoticeType.info,
+      );
+      return;
+    }
+    try {
+      final session = await WatchPartyLauncherSheet.show(
+        context,
+        media: media,
+      );
+      if (session == null || !mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PlayerScreen(
+            media: session.media,
+            watchPartySessionId: session.id,
+          ),
+        ),
+      );
+    } on WatchPartyException catch (error) {
+      if (!mounted) return;
+      AppNotice.show(
+        context,
+        title: 'تعذر بدء المشاهدة الجماعية',
+        message: error.message,
+        type: AppNoticeType.error,
+      );
+    }
   }
 
   Future<void> _showDownloadQuality(MediaItem media) async {
@@ -332,6 +371,7 @@ class _ImmersiveHero extends StatelessWidget {
     required this.downloadProgress,
     required this.onBack,
     required this.onPlay,
+    required this.onWatchParty,
     required this.onDownload,
     required this.onWatchLater,
     required this.onFavorite,
@@ -342,7 +382,7 @@ class _ImmersiveHero extends StatelessWidget {
   final String backdrop;
   final bool watchLater, favorite, downloaded, downloading;
   final double downloadProgress;
-  final VoidCallback onBack, onPlay, onWatchLater, onFavorite;
+  final VoidCallback onBack, onPlay, onWatchParty, onWatchLater, onFavorite;
   final VoidCallback? onDownload;
 
   @override
@@ -399,6 +439,11 @@ class _ImmersiveHero extends StatelessWidget {
                 style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppColors.background, minimumSize: const Size(128, 50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
                 icon: const Icon(Icons.play_arrow_rounded, size: 27),
                 label: const Text('مشاهدة', style: TextStyle(fontWeight: FontWeight.w900)),
+              ),
+              _HeroAction(
+                icon: Icons.groups_2_rounded,
+                label: 'مشاهدة جماعية',
+                onTap: onWatchParty,
               ),
               _HeroAction(
                 icon: downloaded ? Icons.download_done_rounded : Icons.download_rounded,

@@ -15,8 +15,10 @@ import '../../widgets/brand_logo.dart';
 import '../../widgets/cinematy_top_bar.dart';
 import '../../widgets/media_card.dart';
 import '../details/details_screen.dart';
+import '../watch_party/watch_party_service.dart';
 import 'auth_service.dart';
 import 'friend_requests_screen.dart';
+import 'friends_screen.dart';
 
 class AccountScreen extends ConsumerStatefulWidget {
   const AccountScreen({super.key});
@@ -33,7 +35,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
   CinematyUserProfile? _profile;
   String? _profileError;
   int _pendingFriendRequests = 0;
+  int _pendingWatchPartyInvites = 0;
   Timer? _notificationsTimer;
+  StreamSubscription<int>? _watchPartyInvitesSub;
 
   @override
   void initState() {
@@ -43,6 +47,12 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
       const Duration(seconds: 30),
       (_) => _refreshFriendRequestCount(),
     );
+    _watchPartyInvitesSub = WatchPartyService.instance
+        .pendingInvitesCountStream()
+        .listen((count) {
+      if (!mounted || count == _pendingWatchPartyInvites) return;
+      setState(() => _pendingWatchPartyInvites = count);
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _refreshFriendRequestCount();
     });
@@ -59,6 +69,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _notificationsTimer?.cancel();
+    _watchPartyInvitesSub?.cancel();
     super.dispose();
   }
 
@@ -151,6 +162,12 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
     }
   }
 
+  void _openFriends() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const FriendsScreen()),
+    );
+  }
+
   Future<void> _showHandleEditor(User user) async {
     final current = _profile;
     if (current?.hasHandle == true && current?.canChangeHandle != true) {
@@ -206,10 +223,16 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _AccountDetailsSheet(user: user),
+      builder: (_) => _AccountDetailsSheet(user: user, profile: _profile),
     );
-    if (!mounted || action != _AccountAction.signOut) return;
-    await _confirmSignOut();
+    if (!mounted || action == null) return;
+    if (action == _AccountAction.editHandle) {
+      await _showHandleEditor(user);
+      return;
+    }
+    if (action == _AccountAction.signOut) {
+      await _confirmSignOut();
+    }
   }
 
   Future<void> _confirmSignOut() async {
@@ -228,6 +251,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
         _profile = null;
         _loadedUid = null;
         _pendingFriendRequests = 0;
+        _pendingWatchPartyInvites = 0;
       });
       AppNotice.show(
         context,
@@ -290,18 +314,53 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
                     _ProfileAvatar(user: user, size: 82),
                     const SizedBox(width: 15),
                     Expanded(
-                      child: Text(
-                        name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 23,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -.3,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 23,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -.3,
+                            ),
+                          ),
+                          if (_profile?.handle?.isNotEmpty == true) ...[
+                            const SizedBox(height: 7),
+                            Directionality(
+                              textDirection: TextDirection.ltr,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.fingerprint_rounded,
+                                    size: 16,
+                                    color: Colors.white.withOpacity(.52),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Flexible(
+                                    child: Text(
+                                      _profile!.handle!,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: Colors.white.withOpacity(.68),
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 88),
+                    const SizedBox(width: 132),
                   ],
                 ),
               ),
@@ -320,24 +379,20 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
                 child: _CircleAction(
                   icon: Icons.notifications_none_rounded,
                   tooltip: 'الإشعارات',
-                  badge: _pendingFriendRequests,
+                  badge: _pendingFriendRequests + _pendingWatchPartyInvites,
                   onTap: _openFriendRequests,
                 ),
               ),
+              Positioned(
+                top: 12,
+                left: 100,
+                child: _CircleAction(
+                  icon: Icons.people_alt_rounded,
+                  tooltip: 'الأصدقاء',
+                  onTap: _openFriends,
+                ),
+              ),
             ],
-          ),
-          const SizedBox(height: 18),
-          const _SectionTitle(
-            title: 'معرّف حسابك في سينماتي',
-            subtitle: 'معرّف فريد يمكن البحث عنك من خلاله',
-          ),
-          const SizedBox(height: 10),
-          _HandleCard(
-            profile: _profile,
-            loading: _profileLoading,
-            error: _profileError,
-            onRetry: () => _loadProfile(user, force: true),
-            onEdit: () => _showHandleEditor(user),
           ),
           const SizedBox(height: 22),
           Row(
@@ -712,18 +767,23 @@ class _HandleSheetState extends State<_HandleSheet> {
   }
 }
 
-enum _AccountAction { signOut }
+enum _AccountAction { editHandle, signOut }
 
 class _AccountDetailsSheet extends StatelessWidget {
-  const _AccountDetailsSheet({required this.user});
+  const _AccountDetailsSheet({required this.user, required this.profile});
 
   final User user;
+  final CinematyUserProfile? profile;
 
   @override
   Widget build(BuildContext context) {
     final provider = user.providerData.any((e) => e.providerId == 'google.com')
         ? 'Google'
         : 'حساب سينماتي';
+    final handle = profile?.handle;
+    final canChange = profile?.canChangeHandle == true;
+    final nextChange = profile?.nextHandleChangeAt;
+
     return _SheetSurface(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -734,11 +794,95 @@ class _AccountDetailsSheet extends StatelessWidget {
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.035),
+              borderRadius: BorderRadius.circular(17),
+              border: Border.all(color: Colors.white.withOpacity(.06)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.fingerprint_rounded, size: 19),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'اسم المستخدم',
+                        style: TextStyle(fontSize: 10.8, color: Colors.white54),
+                      ),
+                      const SizedBox(height: 3),
+                      Directionality(
+                        textDirection: TextDirection.ltr,
+                        child: Text(
+                          handle?.isNotEmpty == true ? handle! : 'غير محدد',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      if (handle?.isNotEmpty == true && !canChange) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          nextChange == null
+                              ? 'يمكن تغييره بعد مرور 14 يوماً.'
+                              : 'يمكن تغييره بعد ${_dateText(nextChange)}.',
+                          style: TextStyle(
+                            fontSize: 9.8,
+                            color: Colors.white.withOpacity(.4),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (handle?.isNotEmpty == true)
+                  IconButton(
+                    tooltip: 'نسخ اسم المستخدم',
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: handle!));
+                      if (!context.mounted) return;
+                      AppNotice.show(
+                        context,
+                        title: 'تم النسخ',
+                        message: handle,
+                        type: AppNoticeType.success,
+                      );
+                    },
+                    icon: const Icon(Icons.copy_rounded, size: 18),
+                  ),
+                IconButton(
+                  tooltip: handle?.isNotEmpty == true
+                      ? 'تعديل اسم المستخدم'
+                      : 'إنشاء اسم المستخدم',
+                  onPressed: () =>
+                      Navigator.pop(context, _AccountAction.editHandle),
+                  icon: Icon(
+                    handle?.isNotEmpty == true
+                        ? Icons.edit_rounded
+                        : Icons.add_rounded,
+                    size: 18,
+                    color: handle?.isNotEmpty == true && !canChange
+                        ? Colors.white.withOpacity(.34)
+                        : Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
           _InfoRow(icon: Icons.person_rounded, title: 'الاسم', value: _displayName(user)),
           _InfoRow(
             icon: Icons.alternate_email_rounded,
             title: 'البريد الإلكتروني',
-            value: user.email?.trim().isNotEmpty == true ? user.email!.trim() : 'غير متوفر',
+            value: user.email?.trim().isNotEmpty == true
+                ? user.email!.trim()
+                : 'غير متوفر',
             ltr: true,
           ),
           _InfoRow(icon: Icons.login_rounded, title: 'طريقة تسجيل الدخول', value: provider),

@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
 class AppColors {
@@ -70,9 +69,95 @@ class AppTheme {
         backgroundColor: Colors.white.withOpacity(.055),
       ),
       pageTransitionsTheme: const PageTransitionsTheme(builders: {
-        TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-        TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+        TargetPlatform.iOS: _CinematyOpaqueTransitionsBuilder(),
+        TargetPlatform.android: _CinematyOpaqueTransitionsBuilder(),
       }),
+    );
+  }
+}
+
+
+class _CinematyOpaqueTransitionsBuilder extends PageTransitionsBuilder {
+  const _CinematyOpaqueTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    // الخلفية تظهر من أول إطار، لذلك لا تظهر الصفحة السابقة من خلال
+    // الصفحات الشفافة أثناء الانتقال.
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const _RouteBackdrop(),
+        FadeTransition(
+          opacity: CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          ),
+          child: child,
+        ),
+      ],
+    );
+  }
+}
+
+class _RouteBackdrop extends StatelessWidget {
+  const _RouteBackdrop();
+
+  @override
+  Widget build(BuildContext context) {
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF0B0808), AppColors.background],
+        ),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            top: -150,
+            right: -130,
+            child: _RouteGlow(size: 360, opacity: .035),
+          ),
+          Positioned(
+            top: 330,
+            left: -150,
+            child: _RouteGlow(size: 320, opacity: .022),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteGlow extends StatelessWidget {
+  const _RouteGlow({required this.size, required this.opacity});
+  final double size;
+  final double opacity;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            colors: [
+              AppColors.redBright.withOpacity(opacity),
+              Colors.transparent,
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

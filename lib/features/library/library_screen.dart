@@ -21,6 +21,8 @@ import '../../widgets/section_header.dart';
 import '../auth/account_screen.dart';
 import '../details/details_screen.dart';
 import '../player/player_screen.dart';
+import '../watch_party/watch_party_groups_screen.dart';
+import '../watch_party/watch_party_service.dart';
 import 'app_settings_screen.dart';
 import 'subtitle_settings_screen.dart';
 
@@ -59,21 +61,34 @@ class LibraryScreen extends ConsumerWidget {
             title: 'مكتبتي',
             subtitle: 'تنزيلاتك وقوائمك وإعدادات المشاهدة',
           ),
-          _LibraryQuickGrid(
-            downloadsCount: downloads.items.length + downloads.activeItems.length,
-            laterCount: later.length,
-            favoritesCount: favorites.length,
-            onDownloads: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const DownloadsScreen()),
-            ),
-            onLater: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const WatchLaterScreen()),
-            ),
-            onFavorites: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const FavoritesScreen()),
+          StreamBuilder<int>(
+            stream: WatchPartyService.instance
+                .watchGroups()
+                .map((groups) => groups.length),
+            initialData: 0,
+            builder: (context, snapshot) => _LibraryQuickGrid(
+              downloadsCount: downloads.items.length + downloads.activeItems.length,
+              laterCount: later.length,
+              favoritesCount: favorites.length,
+              groupsCount: snapshot.data ?? 0,
+              onDownloads: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+              ),
+              onLater: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const WatchLaterScreen()),
+              ),
+              onFavorites: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FavoritesScreen()),
+              ),
+              onGroups: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const WatchPartyGroupsScreen(),
+                ),
+              ),
             ),
           ),
           const SectionHeader(title: 'حول سينماتي'),
@@ -539,45 +554,53 @@ class _LibraryQuickGrid extends StatelessWidget {
     required this.onLater,
     required this.favoritesCount,
     required this.onFavorites,
+    required this.groupsCount,
+    required this.onGroups,
   });
 
   final int downloadsCount;
   final int laterCount;
   final int favoritesCount;
+  final int groupsCount;
   final VoidCallback onDownloads;
   final VoidCallback onLater;
   final VoidCallback onFavorites;
+  final VoidCallback onGroups;
 
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(18, 6, 18, 6),
-        child: Row(
+        child: GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1.62,
           children: [
-            Expanded(
-              child: _QuickCard(
-                icon: Icons.download_for_offline_rounded,
-                title: 'التنزيلات',
-                subtitle: '$downloadsCount عنصر',
-                onTap: onDownloads,
-              ),
+            _QuickCard(
+              icon: Icons.download_for_offline_rounded,
+              title: 'التنزيلات',
+              subtitle: '$downloadsCount عنصر',
+              onTap: onDownloads,
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _QuickCard(
-                icon: Icons.watch_later_rounded,
-                title: 'مشاهدة لاحقاً',
-                subtitle: '$laterCount عمل',
-                onTap: onLater,
-              ),
+            _QuickCard(
+              icon: Icons.watch_later_rounded,
+              title: 'مشاهدة لاحقاً',
+              subtitle: '$laterCount عمل',
+              onTap: onLater,
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _QuickCard(
-                icon: Icons.bookmark_rounded,
-                title: 'المفضلة',
-                subtitle: '$favoritesCount عمل',
-                onTap: onFavorites,
-              ),
+            _QuickCard(
+              icon: Icons.bookmark_rounded,
+              title: 'المفضلة',
+              subtitle: '$favoritesCount عمل',
+              onTap: onFavorites,
+            ),
+            _QuickCard(
+              icon: Icons.groups_2_rounded,
+              title: 'مجموعات المشاهدة',
+              subtitle: '$groupsCount مجموعة',
+              onTap: onGroups,
             ),
           ],
         ),

@@ -198,17 +198,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 130),
       children: [
-        _ProfileCard(profile: profile),
-        if (_friendship?.isSelf != true) ...[
-          const SizedBox(height: 12),
-          _FriendActionCard(
-            status: _friendship ?? const FriendshipStatus(state: FriendshipState.none),
-            busy: _friendBusy,
-            onAdd: _sendFriendRequest,
-            onCancel: _cancelFriendRequest,
-            onAccept: _acceptIncomingRequest,
-          ),
-        ],
+        _ProfileCard(
+          profile: profile,
+          status: _friendship ??
+              const FriendshipStatus(state: FriendshipState.none),
+          busy: _friendBusy,
+          onAdd: _sendFriendRequest,
+          onCancel: _cancelFriendRequest,
+          onAccept: _acceptIncomingRequest,
+        ),
         const SizedBox(height: 22),
         Row(
           children: [
@@ -292,150 +290,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   }
 }
 
-class _FriendActionCard extends StatelessWidget {
-  const _FriendActionCard({
-    required this.status,
-    required this.busy,
-    required this.onAdd,
-    required this.onCancel,
-    required this.onAccept,
-  });
-
-  final FriendshipStatus status;
-  final bool busy;
-  final VoidCallback onAdd;
-  final VoidCallback onCancel;
-  final VoidCallback onAccept;
-
-  @override
-  Widget build(BuildContext context) {
-    late final IconData icon;
-    late final String title;
-    late final String subtitle;
-    late final Color background;
-    late final Color foreground;
-    VoidCallback? action;
-
-    switch (status.state) {
-      case FriendshipState.friends:
-        icon = Icons.people_alt_rounded;
-        title = 'أصدقاء';
-        subtitle = 'هذا المستخدم موجود ضمن أصدقائك';
-        background = Colors.white.withOpacity(.08);
-        foreground = Colors.white;
-        action = null;
-        break;
-      case FriendshipState.outgoingPending:
-        icon = Icons.schedule_send_rounded;
-        title = 'تم إرسال الطلب';
-        subtitle = 'بانتظار قبول طلب الصداقة';
-        background = Colors.white.withOpacity(.065);
-        foreground = Colors.white.withOpacity(.8);
-        action = null;
-        break;
-      case FriendshipState.incomingPending:
-        icon = Icons.person_add_alt_1_rounded;
-        title = 'قبول طلب الصداقة';
-        subtitle = 'هذا المستخدم أرسل لك طلب صداقة';
-        background = AppColors.redBright;
-        foreground = Colors.white;
-        action = onAccept;
-        break;
-      case FriendshipState.self:
-        icon = Icons.person_rounded;
-        title = 'هذا حسابك';
-        subtitle = '';
-        background = Colors.white.withOpacity(.06);
-        foreground = Colors.white;
-        action = null;
-        break;
-      case FriendshipState.none:
-        icon = Icons.person_add_alt_1_rounded;
-        title = 'إضافة كصديق';
-        subtitle = 'أرسل طلب صداقة لهذا المستخدم';
-        background = Colors.white;
-        foreground = Colors.black;
-        action = onAdd;
-        break;
-    }
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(.028),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: Colors.white.withOpacity(.06)),
-          ),
-          child: Column(
-            children: [
-              Material(
-                color: background,
-                borderRadius: BorderRadius.circular(16),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: busy ? null : action,
-                  child: SizedBox(
-                    height: 50,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (busy)
-                          const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        else
-                          Icon(icon, size: 19, color: foreground),
-                        const SizedBox(width: 9),
-                        Text(
-                          title,
-                          style: TextStyle(
-                            color: foreground,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 7),
-              Text(
-                subtitle,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white.withOpacity(.43),
-                  fontSize: 10.6,
-                ),
-              ),
-              if (status.isOutgoingPending) ...[
-                const SizedBox(height: 4),
-                TextButton(
-                  onPressed: busy ? null : onCancel,
-                  child: const Text(
-                    'إلغاء الطلب',
-                    style: TextStyle(
-                      color: Colors.white54,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _CancelRequestSheet extends StatelessWidget {
   const _CancelRequestSheet();
 
@@ -497,9 +351,21 @@ class _CancelRequestSheet extends StatelessWidget {
 }
 
 class _ProfileCard extends StatelessWidget {
-  const _ProfileCard({required this.profile});
+  const _ProfileCard({
+    required this.profile,
+    required this.status,
+    required this.busy,
+    required this.onAdd,
+    required this.onCancel,
+    required this.onAccept,
+  });
 
   final CinematyUserProfile profile;
+  final FriendshipStatus status;
+  final bool busy;
+  final VoidCallback onAdd;
+  final VoidCallback onCancel;
+  final VoidCallback onAccept;
 
   @override
   Widget build(BuildContext context) {
@@ -515,6 +381,7 @@ class _ProfileCard extends StatelessWidget {
             border: Border.all(color: Colors.white.withOpacity(.07)),
           ),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               _Avatar(url: profile.photoUrl),
               const SizedBox(width: 14),
@@ -534,20 +401,130 @@ class _ProfileCard extends StatelessWidget {
                       ),
                     ),
                     if (profile.handle?.isNotEmpty == true) ...[
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 7),
                       Directionality(
                         textDirection: TextDirection.ltr,
-                        child: Text(
-                          profile.handle!,
-                          style: TextStyle(
-                            color: AppColors.redBright.withOpacity(.9),
-                            fontWeight: FontWeight.w900,
-                            fontSize: 12.5,
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.fingerprint_rounded,
+                              size: 16,
+                              color: Colors.white.withOpacity(.55),
+                            ),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                profile.handle!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(.68),
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ],
+                ),
+              ),
+              if (!status.isSelf) ...[
+                const SizedBox(width: 12),
+                _InlineFriendAction(
+                  status: status,
+                  busy: busy,
+                  onAdd: onAdd,
+                  onCancel: onCancel,
+                  onAccept: onAccept,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InlineFriendAction extends StatelessWidget {
+  const _InlineFriendAction({
+    required this.status,
+    required this.busy,
+    required this.onAdd,
+    required this.onCancel,
+    required this.onAccept,
+  });
+
+  final FriendshipStatus status;
+  final bool busy;
+  final VoidCallback onAdd;
+  final VoidCallback onCancel;
+  final VoidCallback onAccept;
+
+  @override
+  Widget build(BuildContext context) {
+    if (busy) {
+      return const SizedBox(
+        width: 22,
+        height: 22,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+
+    late final String label;
+    late final IconData icon;
+    VoidCallback? action;
+
+    switch (status.state) {
+      case FriendshipState.friends:
+        label = 'أصدقاء';
+        icon = Icons.people_alt_rounded;
+        action = null;
+        break;
+      case FriendshipState.outgoingPending:
+        label = 'تم الإرسال';
+        icon = Icons.schedule_send_rounded;
+        action = onCancel;
+        break;
+      case FriendshipState.incomingPending:
+        label = 'قبول الطلب';
+        icon = Icons.person_add_alt_1_rounded;
+        action = onAccept;
+        break;
+      case FriendshipState.none:
+        label = 'إضافة صديق';
+        icon = Icons.person_add_alt_1_rounded;
+        action = onAdd;
+        break;
+      case FriendshipState.self:
+        label = '';
+        icon = Icons.person_rounded;
+        action = null;
+        break;
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: action,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16.5, color: Colors.white.withOpacity(.78)),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12.2,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white.withOpacity(.88),
                 ),
               ),
             ],

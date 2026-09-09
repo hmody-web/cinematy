@@ -566,7 +566,7 @@ class _HeroCarouselState extends State<_HeroCarousel> {
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
     final bannerWidth = screenWidth * .91;
-    final bannerHeight = (bannerWidth * 9 / 16).clamp(190.0, 310.0).toDouble();
+    final bannerHeight = (bannerWidth * .60).clamp(210.0, 335.0).toDouble();
 
     return Column(
       children: [
@@ -595,7 +595,7 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                           CinematyNetworkImage(
                             url: image,
                             memCacheWidth: 1800,
-                            fit: BoxFit.contain,
+                            fit: BoxFit.cover,
                           ),
                           const DecoratedBox(
                             decoration: BoxDecoration(

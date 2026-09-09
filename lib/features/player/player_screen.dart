@@ -20,19 +20,25 @@ import '../../data/models/video_source.dart';
 import '../../data/services/cinemana_api.dart';
 import '../../data/stores/library_store.dart';
 import '../../providers.dart';
+import '../../widgets/app_notice.dart';
 import '../../widgets/network_image.dart';
 import '../../widgets/shimmer.dart';
 import '../library/subtitle_settings_screen.dart';
+import '../watch_party/watch_party_models.dart';
+import '../watch_party/watch_party_room_sheet.dart';
+import '../watch_party/watch_party_service.dart';
 
 class PlayerScreen extends ConsumerStatefulWidget {
   const PlayerScreen({
     super.key,
     required this.media,
     this.localPath,
+    this.watchPartySessionId,
   });
 
   final MediaItem media;
   final String? localPath;
+  final String? watchPartySessionId;
 
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
@@ -48,15 +54,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   late final VideoController _controller;
   late final CinemanaApi _api;
   late final LibraryStore _libraryStore;
+  late final WatchPartyService _watchPartyService;
 
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<Duration>? _durationSub;
   StreamSubscription<bool>? _bufferingSub;
+  StreamSubscription<WatchPartySession?>? _partySessionSub;
+  StreamSubscription<WatchPartyPlaybackState?>? _partyPlaybackSub;
+  StreamSubscription<List<WatchPartyPresence>>? _partyPresenceSub;
+  StreamSubscription<bool>? _partyEndedSub;
   Timer? _hideTimer;
   Timer? _previewTimer;
   Timer? _progressTimer;
   Timer? _previewDisposeTimer;
   Timer? _seekFeedbackTimer;
+  Timer? _partyHeartbeatTimer;
+  Timer? _partyBufferingTimer;
+  Timer? _partyMessageTimer;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -72,6 +86,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   Uint8List? _sourceSwitchFrame;
   bool _navigatingNext = false;
   String? _error;
+  WatchPartySession? _watchPartySession;
+  WatchPartyMember? _watchPartyMember;
+  WatchPartyPresenceConnection? _watchPartyPresenceConnection;
+  WatchPartyPlaybackState? _pendingPartyState;
+  final Map<String, String> _partyPresenceStates = <String, String>{};
+  Set<String> _partyBufferingUids = <String>{};
+  bool _partyReady = false;
+  bool _partyInitialSyncDone = false;
+  bool _partyApplyingRemote = false;
+  bool _partyDesiredPlaying = false;
+  bool _leavingParty = false;
+  bool _partyHandoff = false;
+  String? _partyOverlayMessage;
   Uint8List? _previewBytes;
   Uint8List? _previewFallbackBytes;
 
@@ -113,12 +140,33 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   double _nextEpisodeProgress = 0;
   bool _nextEpisodeDismissed = false;
 
+  bool get _inWatchParty =>
+      widget.watchPartySessionId?.trim().isNotEmpty == true;
+
+  bool get _isPartyHost =>
+      _watchPartySession != null &&
+      _watchPartyService.currentUid == _watchPartySession!.hostUid;
+
+  bool get _hasActivePartyPeer {
+    final currentUid = _watchPartyService.currentUid;
+    return _partyPresenceStates.entries.any(
+      (entry) => entry.key != currentUid && entry.value == 'active',
+    );
+  }
+
+  bool get _isPartyHostActive {
+    final hostUid = _watchPartySession?.hostUid;
+    if (hostUid == null || hostUid.isEmpty) return false;
+    return _partyPresenceStates[hostUid] == 'active';
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _api = ref.read(apiProvider);
     _libraryStore = ref.read(libraryProvider);
+    _watchPartyService = WatchPartyService.instance;
     _player = Player();
     _controller = VideoController(_player);
 
@@ -144,6 +192,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     _bufferingSub = _player.stream.buffering.listen((value) {
       if (mounted) setState(() => _buffering = value);
+      _handleLocalPartyBuffering(value);
     });
 
     _progressTimer = Timer.periodic(
@@ -157,6 +206,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     );
 
     if (widget.media.isSeries) _loadEpisodes();
+    if (_inWatchParty) unawaited(_initWatchParty());
     _load();
   }
 
@@ -169,6 +219,435 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
   }
 
+  Future<void> _initWatchParty() async {
+    final sessionId = widget.watchPartySessionId?.trim() ?? '';
+    if (sessionId.isEmpty) return;
+    try {
+      final session = await _watchPartyService.loadSession(sessionId);
+      if (session == null || session.ended) {
+        _showPartyOverlay('انتهت جلسة المشاهدة أو لم تعد متاحة.', persistent: true);
+        return;
+      }
+      final uid = _watchPartyService.currentUid;
+      if (uid.isEmpty || !session.memberUids.contains(uid)) {
+        _showPartyOverlay('هذا الحساب ليس ضمن أعضاء جلسة المشاهدة.', persistent: true);
+        return;
+      }
+      final member = session.memberByUid(uid) ??
+          await _watchPartyService.currentMember();
+      if (!mounted) return;
+      setState(() {
+        _watchPartySession = session;
+        _watchPartyMember = member;
+        _partyReady = true;
+      });
+
+      _partySessionSub = _watchPartyService.watchSession(sessionId).listen(
+        (updated) {
+          if (!mounted || updated == null) return;
+          if (updated.ended) {
+            unawaited(_handlePartyEnded());
+            return;
+          }
+          setState(() => _watchPartySession = updated);
+        },
+      );
+      _partyPlaybackSub = _watchPartyService.watchPlayback(sessionId).listen(
+        (state) {
+          if (state != null) unawaited(_handleRemotePartyState(state));
+        },
+      );
+      _partyPresenceSub = _watchPartyService.watchPresence(sessionId).listen(
+        (presence) => unawaited(_handlePartyPresence(presence)),
+      );
+      _partyEndedSub = _watchPartyService.watchEnded(sessionId).listen(
+        (ended) {
+          if (ended) unawaited(_handlePartyEnded());
+        },
+      );
+
+      _watchPartyPresenceConnection =
+          await _watchPartyService.connectPresence(
+        session: session,
+        member: member,
+      );
+
+      _partyHeartbeatTimer?.cancel();
+      _partyHeartbeatTimer = Timer.periodic(
+        const Duration(seconds: 4),
+        (_) => unawaited(_publishPartyHeartbeat()),
+      );
+
+      if (!_loading && !_initializingPlayback) {
+        await _onPartyPlayerReady();
+      }
+    } catch (error) {
+      debugPrint('[WatchParty] init failed: $error');
+      _showPartyOverlay(
+        error is WatchPartyException
+            ? error.message
+            : 'تعذر الاتصال بروم المشاهدة حالياً.',
+        persistent: true,
+      );
+    }
+  }
+
+  Future<void> _onPartyPlayerReady() async {
+    if (!_inWatchParty ||
+        !_partyReady ||
+        _partyInitialSyncDone ||
+        _loading ||
+        _initializingPlayback) {
+      return;
+    }
+    final session = _watchPartySession;
+    if (session == null || session.ended) return;
+
+    // A watch party must never start with only one side inside the player.
+    // The host waits for at least one invited member, while an invited member
+    // waits until the host is actually connected. Presence is realtime, so
+    // this also covers slower devices after the invitation was accepted.
+    if (_isPartyHost && !_hasActivePartyPeer) {
+      _showPartyOverlay(
+        'تمت الموافقة، بانتظار دخول الطرف الآخر إلى المشاهدة…',
+        persistent: true,
+      );
+      return;
+    }
+    if (!_isPartyHost && !_isPartyHostActive) {
+      _showPartyOverlay(
+        'تم قبول الدعوة، بانتظار دخول المضيف إلى المشاهدة…',
+        persistent: true,
+      );
+      return;
+    }
+
+    if (_partyOverlayMessage?.contains('بانتظار دخول') == true) {
+      _clearPartyOverlay();
+    }
+    _partyInitialSyncDone = true;
+
+    if (_isPartyHost) {
+      _partyDesiredPlaying = true;
+      if (_partyBufferingUids.isEmpty) {
+        try {
+          await _player.play();
+        } catch (_) {}
+      }
+      try {
+        await _watchPartyService.publishPlayback(
+          sessionId: session.id,
+          action: 'play',
+          position: _position,
+          playing: true,
+          playbackRate: _playbackRate,
+          media: widget.media,
+        );
+      } catch (error) {
+        debugPrint('[WatchParty] initial host state failed: $error');
+      }
+      return;
+    }
+
+    final pending = _pendingPartyState;
+    if (pending != null) {
+      await _applyRemotePartyState(pending);
+    }
+  }
+
+  Future<void> _publishPartyHeartbeat() async {
+    final session = _watchPartySession;
+    if (!_partyReady || session == null || !_isPartyHost || _loading) return;
+    try {
+      await _watchPartyService.publishHeartbeat(
+        sessionId: session.id,
+        position: _player.state.position,
+        playing: _partyDesiredPlaying,
+        playbackRate: _playbackRate,
+      );
+    } catch (_) {
+      // Heartbeats are best-effort; interaction events still keep the room synced.
+    }
+  }
+
+  Future<void> _handleRemotePartyState(WatchPartyPlaybackState state) async {
+    _pendingPartyState = state;
+    _partyDesiredPlaying = state.playing;
+    if (!_partyReady || _loading || _initializingPlayback || !mounted) return;
+    if (state.sourceUid == _watchPartyService.currentUid) return;
+    await _applyRemotePartyState(state);
+  }
+
+  Future<void> _applyRemotePartyState(WatchPartyPlaybackState state) async {
+    if (!mounted || _partyApplyingRemote || _switchingSource || _scrubbing) {
+      _pendingPartyState = state;
+      return;
+    }
+
+    final remoteMedia = state.media;
+    if (remoteMedia != null &&
+        remoteMedia.id.isNotEmpty &&
+        remoteMedia.id != widget.media.id) {
+      await _navigateToRemotePartyMedia(remoteMedia);
+      return;
+    }
+
+    _partyApplyingRemote = true;
+    try {
+      if ((_playbackRate - state.playbackRate).abs() > .001) {
+        await _player.setRate(state.playbackRate);
+        if (mounted) setState(() => _playbackRate = state.playbackRate);
+      }
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final elapsedMs = state.playing &&
+              _partyBufferingUids.isEmpty &&
+              state.updatedAtMs > 0
+          ? (now - state.updatedAtMs).clamp(0, 5000).toInt()
+          : 0;
+      var targetMs = state.positionMs +
+          (elapsedMs * state.playbackRate).round();
+      if (_duration.inMilliseconds > 0) {
+        targetMs = targetMs.clamp(0, _duration.inMilliseconds).toInt();
+      } else {
+        targetMs = targetMs.clamp(0, 1 << 31).toInt();
+      }
+      final localMs = _player.state.position.inMilliseconds;
+      final drift = (localMs - targetMs).abs();
+      final strict = state.action == 'seek' ||
+          state.action == 'play' ||
+          state.action == 'pause' ||
+          state.action == 'media';
+      if (drift > (strict ? 280 : 950)) {
+        await _player.seek(Duration(milliseconds: targetMs));
+        if (mounted && !_scrubbing) {
+          setState(() => _position = Duration(milliseconds: targetMs));
+        }
+      }
+
+      final shouldPlay = state.playing && _partyBufferingUids.isEmpty;
+      if (shouldPlay && !_player.state.playing) {
+        await _player.play();
+      } else if (!shouldPlay && _player.state.playing) {
+        await _player.pause();
+      }
+      _pendingPartyState = state;
+    } catch (error) {
+      debugPrint('[WatchParty] remote apply failed: $error');
+    } finally {
+      _partyApplyingRemote = false;
+    }
+  }
+
+  Future<void> _navigateToRemotePartyMedia(MediaItem media) async {
+    if (!mounted || _partyHandoff) return;
+    _partyHandoff = true;
+    await _persistProgress();
+    final connection = _watchPartyPresenceConnection;
+    _watchPartyPresenceConnection = null;
+    if (connection != null) await connection.handoff();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => PlayerScreen(
+          media: media,
+          watchPartySessionId: widget.watchPartySessionId,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handlePartyPresence(
+    List<WatchPartyPresence> presence,
+  ) async {
+    if (!mounted || !_partyReady) return;
+    final currentUid = _watchPartyService.currentUid;
+    String? leftMessage;
+
+    for (final item in presence) {
+      final previous = _partyPresenceStates[item.uid];
+      _partyPresenceStates[item.uid] = item.state;
+      if (item.uid != currentUid && previous == 'active' && item.state == 'left') {
+        leftMessage = 'قام ${item.displayName} بمغادرة المشاهدة الجماعية';
+      }
+    }
+
+    final buffering = presence
+        .where((item) => item.active && item.buffering)
+        .map((item) => item.uid)
+        .toSet();
+    final changed = buffering.length != _partyBufferingUids.length ||
+        !buffering.containsAll(_partyBufferingUids);
+    _partyBufferingUids = buffering;
+
+    // If either side entered the player first, presence completion releases
+    // the waiting state and lets the normal initial sync begin once both are
+    // actually connected. Current buffering state is already known here, so
+    // the host cannot flash-play while the other device is still preparing.
+    if (!_partyInitialSyncDone && !_loading && !_initializingPlayback) {
+      final canStart = _isPartyHost ? _hasActivePartyPeer : _isPartyHostActive;
+      if (canStart) {
+        await _onPartyPlayerReady();
+      }
+    }
+
+    if (leftMessage != null) {
+      try {
+        await _player.pause();
+      } catch (_) {}
+      _showPartyOverlay(leftMessage);
+      if (_isPartyHost) {
+        _partyDesiredPlaying = false;
+        final session = _watchPartySession;
+        if (session != null) {
+          try {
+            await _watchPartyService.publishPlayback(
+              sessionId: session.id,
+              action: 'pause',
+              position: _player.state.position,
+              playing: false,
+              playbackRate: _playbackRate,
+            );
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (!changed) return;
+    if (_partyBufferingUids.isNotEmpty) {
+      try {
+        await _player.pause();
+      } catch (_) {}
+      final waitingNames = presence
+          .where((item) => _partyBufferingUids.contains(item.uid))
+          .map((item) => item.uid == currentUid ? 'أنت' : item.displayName)
+          .take(2)
+          .join(' و');
+      _showPartyOverlay(
+        waitingNames.isEmpty
+            ? 'تم إيقاف المشاهدة مؤقتاً بسبب التخزين'
+            : 'جاري انتظار $waitingNames حتى تكتمل الجودة…',
+        persistent: true,
+      );
+      return;
+    }
+
+    if (_partyOverlayMessage?.contains('جاري انتظار') == true ||
+        _partyOverlayMessage?.contains('التخزين') == true) {
+      _clearPartyOverlay();
+    }
+    final pending = _pendingPartyState;
+    if (pending != null) await _applyRemotePartyState(pending);
+  }
+
+  void _handleLocalPartyBuffering(bool buffering) {
+    if (!_inWatchParty || !_partyReady) return;
+    _partyBufferingTimer?.cancel();
+    final connection = _watchPartyPresenceConnection;
+    if (connection == null) return;
+    if (!buffering) {
+      unawaited(connection.setBuffering(false));
+      return;
+    }
+    _partyBufferingTimer = Timer(const Duration(milliseconds: 550), () {
+      if (_buffering && _partyReady) {
+        unawaited(connection.setBuffering(true));
+      }
+    });
+  }
+
+  Future<void> _handlePartyEnded() async {
+    if (!mounted || !_partyReady) return;
+    _partyReady = false;
+    _partyDesiredPlaying = false;
+    try {
+      await _player.pause();
+    } catch (_) {}
+    _showPartyOverlay(
+      'انتهت جلسة المشاهدة لأن المضيف غادر الروم.',
+      persistent: true,
+    );
+  }
+
+  void _showPartyOverlay(String message, {bool persistent = false}) {
+    _partyMessageTimer?.cancel();
+    if (mounted) setState(() => _partyOverlayMessage = message);
+    if (!persistent) {
+      _partyMessageTimer = Timer(const Duration(seconds: 5), () {
+        if (mounted && _partyBufferingUids.isEmpty) {
+          setState(() => _partyOverlayMessage = null);
+        }
+      });
+    }
+  }
+
+  void _clearPartyOverlay() {
+    _partyMessageTimer?.cancel();
+    if (mounted) setState(() => _partyOverlayMessage = null);
+  }
+
+  bool _partyCanPlayPause() {
+    final session = _watchPartySession;
+    return session == null || _watchPartyService.canPlayPause(session);
+  }
+
+  bool _partyCanSeek() {
+    final session = _watchPartySession;
+    return session == null || _watchPartyService.canSeek(session);
+  }
+
+  bool _partyCanChangeEpisode() {
+    final session = _watchPartySession;
+    return session == null || _watchPartyService.canChangeEpisode(session);
+  }
+
+  bool _partyCanChangeSpeed() {
+    final session = _watchPartySession;
+    return session == null || _watchPartyService.canChangeSpeed(session);
+  }
+
+  void _partyPermissionDenied(String action) {
+    AppNotice.show(
+      context,
+      title: 'التحكم مقيّد',
+      message: 'المضيف عطّل صلاحية $action لأعضاء الروم.',
+      type: AppNoticeType.info,
+    );
+  }
+
+  Future<void> _showWatchPartyRoom() async {
+    final sessionId = widget.watchPartySessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    final leave = await WatchPartyRoomSheet.show(
+      context,
+      sessionId: sessionId,
+    );
+    if (leave && mounted) await _exitPlayer();
+  }
+
+  Future<void> _preparePartyExit() async {
+    if (!_inWatchParty || _leavingParty || _partyHandoff) return;
+    _leavingParty = true;
+    final session = _watchPartySession;
+    try {
+      if (session != null && _isPartyHost) {
+        await _watchPartyService.endSession(session);
+      }
+    } catch (_) {}
+    final connection = _watchPartyPresenceConnection;
+    _watchPartyPresenceConnection = null;
+    if (connection != null) {
+      try {
+        await connection.leave();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _exitPlayer() async {
+    await _preparePartyExit();
+    if (mounted) Navigator.pop(context);
+  }
+
   Future<void> _load() async {
     try {
       _initializingPlayback = true;
@@ -176,17 +655,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // اقرأ موضع الاستكمال قبل فتح أي مصدر. بهذه الطريقة لا تستطيع إشعارات
       // position/duration المؤقتة أثناء open أن تمسح أو تغيّر الموضع المحفوظ.
       await _libraryStore.load();
-      final progress = _libraryStore.watchProgress(widget.media.id);
-      if (progress != null &&
-          progress.positionMs >= 5000 &&
-          progress.ratio < .97) {
-        _startupResumeTarget = Duration(milliseconds: progress.positionMs);
-        _position = _startupResumeTarget!;
-        if (progress.durationMs > 0) {
-          _duration = Duration(milliseconds: progress.durationMs);
-        }
-      } else {
+      if (_inWatchParty) {
+        // داخل الروم تكون حالة Firebase هي المصدر الوحيد لموضع التشغيل.
         _startupResumeTarget = null;
+        _position = Duration.zero;
+      } else {
+        final progress = _libraryStore.watchProgress(widget.media.id);
+        if (progress != null &&
+            progress.positionMs >= 5000 &&
+            progress.ratio < .97) {
+          _startupResumeTarget = Duration(milliseconds: progress.positionMs);
+          _position = _startupResumeTarget!;
+          if (progress.durationMs > 0) {
+            _duration = Duration(milliseconds: progress.durationMs);
+          }
+        } else {
+          _startupResumeTarget = null;
+        }
       }
 
       if (widget.localPath?.isNotEmpty == true) {
@@ -194,7 +679,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         await _openRawMedia(
           widget.localPath!,
           target: _startupResumeTarget,
-          playAfterOpen: true,
+          playAfterOpen: !_inWatchParty,
         );
         await _preparePreview(widget.localPath!);
 
@@ -221,7 +706,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         await _openSource(
           _selectedSource!,
           preservePosition: false,
-          forcePlay: true,
+          forcePlay: !_inWatchParty,
           explicitPosition: _startupResumeTarget,
         );
       }
@@ -234,7 +719,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       if (_startupResumeTarget != null) {
         await _stabilizePlaybackPosition(
           _startupResumeTarget!,
-          shouldPlay: true,
+          shouldPlay: !_inWatchParty,
         );
         _position = _player.state.position.inMilliseconds > 0
             ? _player.state.position
@@ -248,6 +733,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           _loading = false;
           _error = null;
         });
+      }
+      if (_inWatchParty) {
+        unawaited(_onPartyPlayerReady());
       }
     } catch (e) {
       _initializingPlayback = false;
@@ -976,15 +1464,97 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     });
   }
 
-  Future<void> _seekRelative(int seconds) async {
+  Future<void> _togglePlayback() async {
+    if (_inWatchParty && !_partyCanPlayPause()) {
+      _partyPermissionDenied('التشغيل والإيقاف');
+      return;
+    }
+    if (_inWatchParty && _partyBufferingUids.isNotEmpty) {
+      AppNotice.show(
+        context,
+        title: 'المشاهدة متوقفة مؤقتاً',
+        message: 'ننتظر اكتمال التخزين عند جميع أعضاء الروم.',
+        type: AppNoticeType.info,
+      );
+      return;
+    }
+    final shouldPlay = _inWatchParty
+        ? !_partyDesiredPlaying
+        : !_player.state.playing;
+    if (shouldPlay) {
+      await _player.play();
+    } else {
+      await _player.pause();
+    }
+    if (_inWatchParty && _partyReady && _watchPartySession != null) {
+      _partyDesiredPlaying = shouldPlay;
+      try {
+        await _watchPartyService.publishPlayback(
+          sessionId: _watchPartySession!.id,
+          action: shouldPlay ? 'play' : 'pause',
+          position: _player.state.position,
+          playing: shouldPlay,
+          playbackRate: _playbackRate,
+        );
+      } catch (_) {}
+    }
+    _scheduleHide();
+  }
+
+  Future<void> _setPlaybackRate(double speed) async {
+    if (_inWatchParty && !_partyCanChangeSpeed()) {
+      _partyPermissionDenied('سرعة التشغيل');
+      return;
+    }
+    await _player.setRate(speed);
+    if (mounted) setState(() => _playbackRate = speed);
+    if (_inWatchParty && _partyReady && _watchPartySession != null) {
+      try {
+        await _watchPartyService.publishPlayback(
+          sessionId: _watchPartySession!.id,
+          action: 'speed',
+          position: _player.state.position,
+          playing: _partyDesiredPlaying,
+          playbackRate: speed,
+        );
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _seekRelative(
+    int seconds, {
+    Alignment? feedbackAlignment,
+  }) async {
+    if (_inWatchParty && !_partyCanSeek()) {
+      _partyPermissionDenied('التقديم والرجوع');
+      return;
+    }
     final max = _duration.inMilliseconds > 0
         ? _duration.inMilliseconds
         : _position.inMilliseconds + 10000;
     final target = (_position.inMilliseconds + seconds * 1000)
         .clamp(0, max)
         .toInt();
-    await _player.seek(Duration(milliseconds: target));
-    if (mounted) setState(() => _position = Duration(milliseconds: target));
+    final targetDuration = Duration(milliseconds: target);
+    await _player.seek(targetDuration);
+    if (mounted) setState(() => _position = targetDuration);
+    if (feedbackAlignment != null) {
+      _showSeekFeedback(
+        seconds > 0 ? '+${seconds.abs()} ثانية' : '-${seconds.abs()} ثانية',
+        feedbackAlignment,
+      );
+    }
+    if (_inWatchParty && _partyReady && _watchPartySession != null) {
+      try {
+        await _watchPartyService.publishPlayback(
+          sessionId: _watchPartySession!.id,
+          action: 'seek',
+          position: targetDuration,
+          playing: _partyDesiredPlaying,
+          playbackRate: _playbackRate,
+        );
+      } catch (_) {}
+    }
     _scheduleHide();
   }
 
@@ -994,10 +1564,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     // نحافظ على السلوك المتعارف عليه في المشغلات: يمين = تقديم، يسار = رجوع
     // حتى لو كانت واجهة التطبيق RTL.
     final seconds = isRight ? 10 : -10;
-    _seekRelative(seconds);
-    _showSeekFeedback(
-      seconds > 0 ? '+10 ثانية' : '-10 ثانية',
-      isRight ? Alignment.centerRight : Alignment.centerLeft,
+    unawaited(
+      _seekRelative(
+        seconds,
+        feedbackAlignment:
+            isRight ? Alignment.centerRight : Alignment.centerLeft,
+      ),
     );
   }
 
@@ -1134,6 +1706,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _previewTimer?.cancel();
     _previewGeneration++;
     _pendingPreviewTarget = null;
+    if (_inWatchParty && !_partyCanSeek()) {
+      if (mounted) {
+        setState(() {
+          _position = _player.state.position;
+          _scrubbing = false;
+          _previewBytes = null;
+        });
+      }
+      _partyPermissionDenied('سحب شريط التقدم');
+      return;
+    }
     final target = Duration(milliseconds: value.toInt());
     await _player.seek(target);
     if (mounted) {
@@ -1142,6 +1725,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         _scrubbing = false;
         _previewBytes = null;
       });
+    }
+    if (_inWatchParty && _partyReady && _watchPartySession != null) {
+      try {
+        await _watchPartyService.publishPlayback(
+          sessionId: _watchPartySession!.id,
+          action: 'seek',
+          position: target,
+          playing: _partyDesiredPlaying,
+          playbackRate: _playbackRate,
+        );
+      } catch (_) {}
     }
     _previewDisposeTimer?.cancel();
     // نبقي مشغل المعاينة مجهزاً طوال جلسة المشاهدة. التخلص منه بعد 12 ثانية
@@ -1185,7 +1779,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     // التقدم مربوط بزمن الفيديو نفسه: يتوقف إذا توقف الفيديو أو حدث buffering،
     // ولا يسبق نهاية الحلقة بسبب مؤقت مستقل عن المشغل.
-    if (progress >= .995 && !_navigatingNext) {
+    if (progress >= .995 &&
+        !_navigatingNext &&
+        (!_inWatchParty || _isPartyHost)) {
       _goToNextEpisode();
     }
   }
@@ -1207,21 +1803,48 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   Future<void> _goToNextEpisode() async {
     final next = _nextEpisode;
     if (next == null || _navigatingNext || !mounted) return;
+    if (_inWatchParty && !_partyCanChangeEpisode()) {
+      _partyPermissionDenied('تغيير الحلقة');
+      return;
+    }
     _navigatingNext = true;
     await _persistProgress();
     if (!mounted) return;
-    _goToEpisode(next);
+    await _goToEpisode(next);
   }
 
-  void _goToEpisode(Episode episode) {
+  Future<void> _goToEpisode(Episode episode) async {
     if (!mounted) return;
+    if (_inWatchParty && !_partyCanChangeEpisode()) {
+      _partyPermissionDenied('تغيير الحلقة');
+      return;
+    }
     final media = _episodeMedia(episode);
+    if (_inWatchParty && _partyReady && _watchPartySession != null) {
+      _partyDesiredPlaying = true;
+      try {
+        await _watchPartyService.publishPlayback(
+          sessionId: _watchPartySession!.id,
+          action: 'media',
+          position: Duration.zero,
+          playing: true,
+          playbackRate: _playbackRate,
+          media: media,
+        );
+      } catch (_) {}
+      final connection = _watchPartyPresenceConnection;
+      _watchPartyPresenceConnection = null;
+      _partyHandoff = true;
+      if (connection != null) await connection.handoff();
+    }
+    if (!mounted) return;
     final downloaded = ref.read(downloadProvider).itemFor(episode.id);
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => PlayerScreen(
           media: media,
-          localPath: downloaded?.localPath,
+          localPath: _inWatchParty ? null : downloaded?.localPath,
+          watchPartySessionId: widget.watchPartySessionId,
         ),
       ),
     );
@@ -1286,9 +1909,32 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _progressTimer?.cancel();
     _previewDisposeTimer?.cancel();
     _seekFeedbackTimer?.cancel();
+    _partyHeartbeatTimer?.cancel();
+    _partyBufferingTimer?.cancel();
+    _partyMessageTimer?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
     _bufferingSub?.cancel();
+    _partySessionSub?.cancel();
+    _partyPlaybackSub?.cancel();
+    _partyPresenceSub?.cancel();
+    _partyEndedSub?.cancel();
+    final partyConnection = _watchPartyPresenceConnection;
+    _watchPartyPresenceConnection = null;
+    if (partyConnection != null) {
+      if (_partyHandoff) {
+        unawaited(partyConnection.handoff());
+      } else {
+        unawaited(partyConnection.leave());
+      }
+    }
+    if (_inWatchParty &&
+        !_partyHandoff &&
+        !_leavingParty &&
+        _isPartyHost &&
+        _watchPartySession != null) {
+      unawaited(_watchPartyService.endSession(_watchPartySession!));
+    }
     _persistProgress();
     _previewWarmupStopRequested = true;
     _previewWarmupGeneration++;
@@ -1375,6 +2021,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               alignment: _seekFeedbackAlignment,
               serial: _seekFeedbackSerial,
             ),
+            if (_inWatchParty && _partyOverlayMessage != null)
+              SafeArea(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 66),
+                    child: _WatchPartyStatusPill(
+                      message: _partyOverlayMessage!,
+                    ),
+                  ),
+                ),
+              ),
             AnimatedOpacity(
               duration: const Duration(milliseconds: 220),
               opacity: _controls ? 1 : 0,
@@ -1445,7 +2103,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               _TinyPlayerAction(
                 icon: Icons.arrow_forward_ios_rounded,
                 tooltip: 'رجوع',
-                onTap: () => Navigator.pop(context),
+                onTap: _inWatchParty
+                    ? () => unawaited(_exitPlayer())
+                    : () => Navigator.pop(context),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -1479,6 +2139,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                   ],
                 ),
               ),
+              if (_inWatchParty)
+                _TinyPlayerAction(
+                  icon: Icons.groups_2_rounded,
+                  tooltip: 'إدارة الروم',
+                  onTap: () => unawaited(_showWatchPartyRoom()),
+                ),
               if (widget.media.isSeries)
                 _TinyPlayerAction(
                   icon: Icons.video_library_rounded,
@@ -1528,10 +2194,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
             _RoundPlayerButton(
               icon: Icons.replay_10_rounded,
               size: 52,
-              onTap: () {
-                _seekRelative(-10);
-                _showSeekFeedback('-10 ثانية', Alignment.centerLeft);
-              },
+              onTap: () => unawaited(
+                _seekRelative(
+                  -10,
+                  feedbackAlignment: Alignment.centerLeft,
+                ),
+              ),
             ),
             const SizedBox(width: 28),
             StreamBuilder<bool>(
@@ -1543,20 +2211,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                     : Icons.play_arrow_rounded,
                 size: 72,
                 filled: true,
-                onTap: () {
-                  _player.playOrPause();
-                  _scheduleHide();
-                },
+                onTap: () => unawaited(_togglePlayback()),
               ),
             ),
             const SizedBox(width: 28),
             _RoundPlayerButton(
               icon: Icons.forward_10_rounded,
               size: 52,
-              onTap: () {
-                _seekRelative(10);
-                _showSeekFeedback('+10 ثانية', Alignment.centerRight);
-              },
+              onTap: () => unawaited(
+                _seekRelative(
+                  10,
+                  feedbackAlignment: Alignment.centerRight,
+                ),
+              ),
             ),
           ],
         ),
@@ -1700,8 +2367,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                 selected: _playbackRate == speed,
                 onTap: () async {
                   Navigator.pop(context);
-                  await _player.setRate(speed);
-                  if (mounted) setState(() => _playbackRate = speed);
+                  await _setPlaybackRate(speed);
                 },
               ),
             )
@@ -1725,7 +2391,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         currentMedia: widget.media,
         onEpisode: (episode) {
           Navigator.pop(context);
-          _goToEpisode(episode);
+          unawaited(_goToEpisode(episode));
         },
       ),
     );
@@ -1758,6 +2424,57 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         ? 'ترجمة ${index + 1}'
         : (sub.label.isNotEmpty ? sub.label : sub.language);
   }
+}
+
+class _WatchPartyStatusPill extends StatelessWidget {
+  const _WatchPartyStatusPill({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 520),
+          margin: const EdgeInsets.symmetric(horizontal: 18),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xE6191414),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(.09)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x66000000),
+                blurRadius: 22,
+                offset: Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.groups_2_rounded,
+                size: 19,
+                color: AppColors.redBright,
+              ),
+              const SizedBox(width: 9),
+              Flexible(
+                child: Text(
+                  message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.35,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 class _ProgressScrubber extends StatefulWidget {

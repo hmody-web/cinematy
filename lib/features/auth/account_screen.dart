@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../widgets/cinematy_backdrop.dart';
 import '../../widgets/app_notice.dart';
 import '../../widgets/brand_logo.dart';
 import '../../widgets/cinematy_top_bar.dart';
@@ -96,30 +97,30 @@ class _AccountScreenState extends State<AccountScreen> {
       ),
       body: Stack(
         children: [
-          const Positioned.fill(child: _AccountBackdrop()),
+          const Positioned.fill(child: CinematyBackdrop()),
           StreamBuilder<User?>(
             stream: AuthService.instance.authStateChanges,
-            initialData: AuthService.instance.currentUser,
-            builder: (context, snapshot) {
-              final user = snapshot.data;
-              return AnimatedSwitcher(
-                duration: const Duration(milliseconds: 360),
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                child: user == null
-                    ? _SignedOutView(
-                        key: const ValueKey('signed-out'),
-                        busy: _busy,
-                        onSignIn: _signIn,
-                      )
-                    : _ProfileView(
-                        key: ValueKey('profile-${user.uid}'),
-                        user: user,
-                        busy: _busy,
-                        onSignOut: _signOut,
-                      ),
-              );
-            },
+        initialData: AuthService.instance.currentUser,
+        builder: (context, snapshot) {
+          final user = snapshot.data;
+          return AnimatedSwitcher(
+            duration: const Duration(milliseconds: 360),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: user == null
+                ? _SignedOutView(
+                    key: const ValueKey('signed-out'),
+                    busy: _busy,
+                    onSignIn: _signIn,
+                  )
+                : _ProfileView(
+                    key: ValueKey('profile-${user.uid}'),
+                    user: user,
+                    busy: _busy,
+                    onSignOut: _signOut,
+                  ),
+          );
+        },
           ),
         ],
       ),
@@ -183,7 +184,7 @@ class _SignedOutView extends StatelessWidget {
               ),
               const SizedBox(height: 9),
               Text(
-                'سجّل دخولك بحساب Google ليكون لديك حساب ثابت وآمن داخل التطبيق، ويصبح جاهزاً لميزات المجموعات والمشاهدة الجماعية لاحقاً.',
+                'سجّل الدخول باستخدام Google للوصول إلى حسابك في سينماتي والاستفادة من ميزات الحساب بسهولة وأمان.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white.withOpacity(.62),
@@ -204,7 +205,7 @@ class _SignedOutView extends StatelessWidget {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    'المصادقة تتم عبر Google وFirebase',
+                    'تسجيل دخول آمن باستخدام Google',
                     style: TextStyle(
                       color: Colors.white.withOpacity(.38),
                       fontSize: 10.7,
@@ -231,13 +232,13 @@ class _SignedOutView extends StatelessWidget {
         const _FeatureCard(
           icon: Icons.groups_2_rounded,
           title: 'جاهز للمشاهدة الجماعية',
-          subtitle: 'سيكون هذا الحساب هو هويتك داخل المجموعات والرومات عند إضافة الميزة.',
+          subtitle: 'حساب واحد يعرّفك داخل سينماتي ويحافظ على معلومات حسابك في مكان واحد.',
         ),
         const SizedBox(height: 10),
         const _FeatureCard(
           icon: Icons.devices_rounded,
           title: 'جلسة ثابتة',
-          subtitle: 'Firebase يحتفظ بحالة تسجيل الدخول على جهازك بشكل آمن.',
+          subtitle: 'يبقى تسجيل دخولك محفوظاً على جهازك حتى تختار تسجيل الخروج.',
         ),
       ],
     );
@@ -262,7 +263,7 @@ class _ProfileView extends StatelessWidget {
     final email = user.email?.trim();
     final provider = user.providerData.isNotEmpty
         ? _providerLabel(user.providerData.first.providerId)
-        : 'Firebase';
+        : 'سينماتي';
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 42),
@@ -352,7 +353,7 @@ class _ProfileView extends StatelessWidget {
                     const SizedBox(width: 9),
                     Expanded(
                       child: Text(
-                        'أنت مسجّل الدخول وحسابك متصل بـ Firebase بنجاح.',
+                        'أنت مسجّل الدخول وحسابك متصل بسينماتي بنجاح.',
                         style: TextStyle(
                           color: Colors.white.withOpacity(.78),
                           fontSize: 11.7,
@@ -368,8 +369,15 @@ class _ProfileView extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         const _SectionTitle(
+          title: 'معرّف حسابك في سينماتي',
+          subtitle: 'يمكنك نسخه واستخدامه عند الحاجة',
+        ),
+        const SizedBox(height: 10),
+        _UidCard(uid: user.uid),
+        const SizedBox(height: 18),
+        const _SectionTitle(
           title: 'الملف الشخصي',
-          subtitle: 'معلومات الحساب المرتبط بالتطبيق',
+          subtitle: 'معلومات حسابك في سينماتي',
         ),
         const SizedBox(height: 10),
         _DetailsCard(
@@ -403,13 +411,6 @@ class _ProfileView extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 18),
-        const _SectionTitle(
-          title: 'معرّف الحساب',
-          subtitle: 'معرّف Firebase الفريد لهذا المستخدم',
-        ),
-        const SizedBox(height: 10),
-        _UidCard(uid: user.uid),
-        const SizedBox(height: 18),
         _GlassCard(
           padding: const EdgeInsets.all(16),
           child: Row(
@@ -438,7 +439,7 @@ class _ProfileView extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'هذا الحساب سيكون هويتك عند إضافة المجموعات والمشاهدة الجماعية، بدون تغيير نظام تسجيل الدخول لاحقاً.',
+                      'استخدم حسابك كهوية موحدة داخل سينماتي للوصول إلى ميزات الحساب بسهولة.',
                       style: TextStyle(
                         color: Colors.white.withOpacity(.53),
                         fontSize: 11.2,
@@ -705,7 +706,7 @@ class _UidCard extends StatelessWidget {
               AppNotice.show(
                 context,
                 title: 'تم النسخ',
-                message: 'تم نسخ معرّف الحساب.',
+                message: 'تم نسخ معرّف حسابك في سينماتي.',
                 type: AppNoticeType.success,
               );
             },
@@ -959,62 +960,6 @@ class _GlassCard extends StatelessWidget {
   }
 }
 
-class _AccountBackdrop extends StatelessWidget {
-  const _AccountBackdrop();
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFF0B0606), AppColors.background],
-          ),
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              top: -120,
-              right: -95,
-              child: _GlowOrb(size: 300, opacity: .12),
-            ),
-            Positioned(
-              top: 310,
-              left: -120,
-              child: _GlowOrb(size: 250, opacity: .055),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _GlowOrb extends StatelessWidget {
-  const _GlowOrb({required this.size, required this.opacity});
-
-  final double size;
-  final double opacity;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: [
-            AppColors.redBright.withOpacity(opacity),
-            AppColors.redBright.withOpacity(0),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _SignOutSheet extends StatelessWidget {
   const _SignOutSheet();
@@ -1126,7 +1071,7 @@ String _providerLabel(String providerId) {
     'google.com' => 'Google',
     'apple.com' => 'Apple',
     'password' => 'البريد الإلكتروني',
-    _ => 'Firebase',
+    _ => 'سينماتي',
   };
 }
 

@@ -55,6 +55,7 @@ class _CinematyShellState extends State<CinematyShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.transparent,
       extendBody: true,
       body: NotificationListener<UserScrollNotification>(
         onNotification: _onUserScroll,

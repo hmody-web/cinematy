@@ -29,7 +29,8 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
-      scaffoldBackgroundColor: AppColors.background,
+      scaffoldBackgroundColor: Colors.transparent,
+      canvasColor: Colors.transparent,
       colorScheme: scheme.copyWith(
         primary: AppColors.redBright,
         secondary: AppColors.red,

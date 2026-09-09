@@ -235,8 +235,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
           type: AppNoticeType.success,
         );
       }
-    } catch (e) {
-      if (mounted) AppNotice.show(context, title: 'فشل التنزيل', message: e.toString().replaceFirst('Bad state: ', ''), type: AppNoticeType.error);
+    } catch (_) {
+      if (mounted) {
+        AppNotice.show(
+          context,
+          title: 'تعذر التنزيل',
+          message: 'تعذر بدء التنزيل حالياً. حاول مرة أخرى.',
+          type: AppNoticeType.error,
+        );
+      }
     }
   }
 
@@ -283,8 +290,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
         } catch (_) {}
       }
       if (mounted) AppNotice.show(context, title: 'اكتمل تنزيل الموسم', type: AppNoticeType.success);
-    } catch (e) {
-      if (mounted) AppNotice.show(context, title: 'تعذر تنزيل الموسم', message: e.toString(), type: AppNoticeType.error);
+    } catch (_) {
+      if (mounted) {
+        AppNotice.show(
+          context,
+          title: 'تعذر تنزيل الموسم',
+          message: 'لم يكتمل تنزيل الموسم. حاول مرة أخرى.',
+          type: AppNoticeType.error,
+        );
+      }
     }
   }
 

@@ -51,6 +51,10 @@ class LibraryScreen extends ConsumerWidget {
         key: const PageStorageKey('library-scroll'),
         padding: const EdgeInsets.only(bottom: 130),
         children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(18, 14, 18, 6),
+            child: _LibraryAccountCard(),
+          ),
           const SectionHeader(
             title: 'المفضلة',
             subtitle: 'الأعمال التي حفظتها للوصول السريع',
@@ -69,10 +73,6 @@ class LibraryScreen extends ConsumerWidget {
           const SectionHeader(
             title: 'مكتبتي',
             subtitle: 'تنزيلاتك وقوائمك وإعدادات المشاهدة',
-          ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(18, 0, 18, 8),
-            child: _LibraryAccountCard(),
           ),
           _LibraryQuickGrid(
             downloadsCount: downloads.items.length + downloads.activeItems.length,
@@ -378,7 +378,7 @@ class _LibraryAccountCard extends StatelessWidget {
                               ? (email?.isNotEmpty == true
                                   ? email!
                                   : 'حساب Google متصل')
-                              : 'حسابك للمجموعات والمشاهدة الجماعية وميزاتك القادمة',
+                              : 'الوصول إلى حسابك وميزات سينماتي',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(

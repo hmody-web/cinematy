@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/app_theme.dart';
 import 'features/shell/cinematy_shell.dart';
 import 'providers.dart';
+import 'widgets/cinematy_backdrop.dart';
 import 'widgets/glass_navigation_bar.dart';
 
 class CinematyApp extends ConsumerWidget {
@@ -27,7 +28,13 @@ class CinematyApp extends ConsumerWidget {
       ],
       builder: (context, child) => Directionality(
         textDirection: TextDirection.rtl,
-        child: child ?? const SizedBox.shrink(),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            const CinematyBackdrop(),
+            child ?? const SizedBox.shrink(),
+          ],
+        ),
       ),
       home: const CinematyShell(),
     );

@@ -136,9 +136,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               hasScrollBody: false,
               child: EmptyState(
                 title: 'تعذر تحميل مكتبة سينمانا',
-                message: kDebugMode
-                    ? 'اسحب للأسفل للمحاولة مجدداً.\n\nتفاصيل التشخيص:\n$error'
-                    : 'تحقق من الاتصال ثم اسحب للأسفل للمحاولة مجدداً.',
+                message:
+                    'تحقق من الاتصال ثم اسحب للأسفل للمحاولة مجدداً.',
                 onRetry: () => _refresh(ref),
               ),
             ),

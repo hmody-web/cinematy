@@ -14,11 +14,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "973890908256-u40ji73hq2of8cdm8nl41mv2ednb8u5g.apps.googleusercontent.com",
+          "client_id": "973890908256-vc58q9li4kb2fd1e5s4v4phc53can5e1.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.cinematy.app",
-            "certificate_hash": "adeb2dfc7d1d009a09f3fbf794e4ae8f9cfb4dd7"
+            "certificate_hash": "adeb2dfc7d1d009a09f3fbe794f4ae8f9ceb4dd7"
           }
         },
         {

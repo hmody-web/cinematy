@@ -10,3 +10,4 @@ android/local.properties
 ios/Pods/
 ios/.symlinks/
 *.iml
+cinematy-installed.apk

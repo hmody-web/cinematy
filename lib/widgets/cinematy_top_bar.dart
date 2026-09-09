@@ -189,47 +189,61 @@ class _AccountQuickActionState extends State<_AccountQuickAction> {
         const cardWidth = 306.0;
         final maxLeft = (screen.width - cardWidth - 12).clamp(12.0, double.infinity).toDouble();
         final left = (position.dx - 2).clamp(12.0, maxLeft).toDouble();
-        final arrowLeft = (position.dx + size.width / 2 - left - 7)
-            .clamp(18.0, cardWidth - 30)
-            .toDouble();
         return Material(
           color: Colors.transparent,
           child: Stack(
             children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.of(dialogContext).pop(),
+                  child: const SizedBox.expand(),
+                ),
+              ),
               Positioned(
                 top: position.dy + size.height + 7,
                 left: left,
                 width: cardWidth,
-                child: Directionality(
-                  textDirection: TextDirection.rtl,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: EdgeInsets.only(right: arrowLeft),
-                        child: Transform.rotate(
-                          angle: .785398,
-                          child: Container(
-                            width: 14,
-                            height: 14,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF171719),
-                              border: Border(
-                                top: BorderSide(color: Colors.white.withOpacity(.09)),
-                                left: BorderSide(color: Colors.white.withOpacity(.09)),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: () {},
+                  child: Directionality(
+                    textDirection: TextDirection.rtl,
+                    child: Column(
+                      children: [
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 24),
+                            child: Transform.rotate(
+                              angle: .785398,
+                              child: Container(
+                                width: 14,
+                                height: 14,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF171719),
+                                  border: Border(
+                                    top: BorderSide(
+                                      color: Colors.white.withOpacity(.09),
+                                    ),
+                                    right: BorderSide(
+                                      color: Colors.white.withOpacity(.09),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      Transform.translate(
-                        offset: const Offset(0, -7),
-                        child: _AccountPopoverBody(
-                          initialUser: user,
-                          rootContext: context,
+                        Transform.translate(
+                          offset: const Offset(0, -7),
+                          child: _AccountPopoverBody(
+                            initialUser: user,
+                            rootContext: context,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -243,7 +257,7 @@ class _AccountQuickActionState extends State<_AccountQuickAction> {
           scale: Tween<double>(begin: .965, end: 1).animate(
             CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
           ),
-          alignment: Alignment.topLeft,
+          alignment: Alignment.topRight,
           child: child,
         ),
       ),

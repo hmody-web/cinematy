@@ -181,7 +181,7 @@ class _WatchPartyRoomSheetState extends State<WatchPartyRoomSheet> {
                         ),
                       ),
                       Text(
-                        isHost ? 'أنت المضيف' : 'مشاهدة متزامنة',
+                        isHost ? 'أنت المضيف' : 'مزامنة الشريط والتحكم',
                         style: TextStyle(
                           color: Colors.white.withOpacity(.45),
                           fontSize: 11,
@@ -207,7 +207,6 @@ class _WatchPartyRoomSheetState extends State<WatchPartyRoomSheet> {
     final active = session.members
         .where((member) => presence[member.uid]?.active == true)
         .length;
-    final buffering = presence.values.where((e) => e.buffering).length;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -221,9 +220,7 @@ class _WatchPartyRoomSheetState extends State<WatchPartyRoomSheet> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              buffering > 0
-                  ? 'المشاهدة متوقفة مؤقتاً بانتظار $buffering من الأعضاء.'
-                  : '$active من ${session.members.length} متصلين الآن • المزامنة فعالة',
+              '$active من ${session.members.length} متصلين الآن • تتم مزامنة أوامر الشريط فقط، وكل فيديو يعمل بشكل مستقل.',
               style: TextStyle(
                 color: Colors.white.withOpacity(.62),
                 fontSize: 11.5,
@@ -375,7 +372,6 @@ class _MemberPresenceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final active = presence?.active == true;
-    final buffering = presence?.buffering == true;
     return Container(
       margin: const EdgeInsets.only(bottom: 7),
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
@@ -404,11 +400,7 @@ class _MemberPresenceTile extends StatelessWidget {
                   height: 12,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: buffering
-                        ? Colors.amber
-                        : active
-                            ? AppColors.success
-                            : Colors.white38,
+                    color: active ? AppColors.success : Colors.white38,
                     border: Border.all(color: const Color(0xFF110D0D), width: 2),
                   ),
                 ),
@@ -429,11 +421,7 @@ class _MemberPresenceTile extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
                 Text(
-                  buffering
-                      ? 'جاري التخزين المؤقت'
-                      : active
-                          ? 'متصل الآن'
-                          : 'غير متصل',
+                  active ? 'متصل الآن' : 'غير متصل',
                   style: TextStyle(
                     color: Colors.white.withOpacity(.42),
                     fontSize: 10.5,

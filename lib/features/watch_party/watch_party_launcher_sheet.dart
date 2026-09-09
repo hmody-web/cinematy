@@ -10,7 +10,7 @@ import '../../widgets/network_image.dart';
 import 'watch_party_models.dart';
 import 'watch_party_service.dart';
 
-enum _LauncherStep { home, friend, waitingFriend, groups, createGroup }
+enum _LauncherStep { home, friend, waitingFriend, groups, createGroup, waitingGroup }
 
 class WatchPartyLauncherSheet extends StatefulWidget {
   const WatchPartyLauncherSheet({super.key, required this.media});
@@ -48,7 +48,10 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
   WatchPartySession? _waitingSession;
   CinematyUserProfile? _waitingFriend;
   StreamSubscription<WatchPartyInvite?>? _waitingInviteSub;
+  final List<StreamSubscription<WatchPartyInvite?>> _waitingGroupInviteSubs = [];
   String _waitingStatus = 'pending';
+  WatchPartyGroup? _waitingGroup;
+  final Map<String, String> _waitingGroupStatuses = <String, String>{};
   bool _openingAcceptedParty = false;
 
   @override
@@ -60,6 +63,10 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
   @override
   void dispose() {
     _waitingInviteSub?.cancel();
+    for (final sub in _waitingGroupInviteSubs) {
+      sub.cancel();
+    }
+    _waitingGroupInviteSubs.clear();
     final waitingSession = _waitingSession;
     if (waitingSession != null && !_openingAcceptedParty) {
       unawaited(
@@ -169,6 +176,10 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
     setState(() => _busy = true);
     await _waitingInviteSub?.cancel();
     _waitingInviteSub = null;
+    for (final sub in _waitingGroupInviteSubs) {
+      await sub.cancel();
+    }
+    _waitingGroupInviteSubs.clear();
     try {
       await WatchPartyService.instance.cancelPendingSession(session);
     } catch (error) {
@@ -180,10 +191,15 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
       setState(() {
         _busy = false;
         _waitingSession = null;
+        final wasGroup = _waitingGroup != null;
         _waitingFriend = null;
+        _waitingGroup = null;
+        _waitingGroupStatuses.clear();
         _waitingStatus = 'pending';
         _openingAcceptedParty = false;
-        if (returnToFriends) _step = _LauncherStep.friend;
+        if (returnToFriends) {
+          _step = wasGroup ? _LauncherStep.groups : _LauncherStep.friend;
+        }
       });
     }
   }
@@ -197,13 +213,90 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
         group: group,
       );
       if (!mounted) return;
-      Navigator.pop(context, session);
+      await _beginWaitingForGroup(session, group);
     } on WatchPartyException catch (error) {
       _showError(error.message);
     } catch (_) {
       _showError('تعذر بدء المشاهدة مع هذه المجموعة.');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _beginWaitingForGroup(
+    WatchPartySession session,
+    WatchPartyGroup group,
+  ) async {
+    await _waitingInviteSub?.cancel();
+    _waitingInviteSub = null;
+    for (final sub in _waitingGroupInviteSubs) {
+      await sub.cancel();
+    }
+    _waitingGroupInviteSubs.clear();
+
+    final myUid = WatchPartyService.instance.currentUid;
+    final invitees = session.members
+        .where((member) => member.uid.isNotEmpty && member.uid != myUid)
+        .toList();
+    if (invitees.isEmpty) {
+      throw const WatchPartyException(
+        'المجموعة لا تحتوي أعضاء يمكن دعوتهم للمشاهدة.',
+      );
+    }
+
+    _openingAcceptedParty = false;
+    _waitingGroupStatuses
+      ..clear()
+      ..addEntries(invitees.map((member) => MapEntry(member.uid, 'pending')));
+
+    if (!mounted) return;
+    setState(() {
+      _waitingSession = session;
+      _waitingFriend = null;
+      _waitingGroup = group;
+      _waitingStatus = 'pending';
+      _step = _LauncherStep.waitingGroup;
+    });
+
+    for (final member in invitees) {
+      final sub = WatchPartyService.instance
+          .watchInvite(sessionId: session.id, toUid: member.uid)
+          .listen(
+        (invite) async {
+          if (!mounted ||
+              _waitingSession?.id != session.id ||
+              invite == null ||
+              _openingAcceptedParty) {
+            return;
+          }
+
+          setState(() {
+            _waitingGroupStatuses[member.uid] = invite.status;
+          });
+
+          final allAccepted = invitees.every(
+            (item) => _waitingGroupStatuses[item.uid] == 'accepted',
+          );
+          if (!allAccepted) return;
+
+          _openingAcceptedParty = true;
+          setState(() => _waitingStatus = 'accepted');
+          await Future<void>.delayed(const Duration(milliseconds: 650));
+          if (!mounted || _waitingSession?.id != session.id) return;
+          for (final activeSub in _waitingGroupInviteSubs) {
+            unawaited(activeSub.cancel());
+          }
+          _waitingGroupInviteSubs.clear();
+          if (mounted) Navigator.pop(context, session);
+        },
+        onError: (_) {
+          if (!mounted || _waitingSession?.id != session.id) return;
+          setState(() {
+            _waitingGroupStatuses[member.uid] = 'error';
+          });
+        },
+      );
+      _waitingGroupInviteSubs.add(sub);
     }
   }
 
@@ -227,7 +320,7 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
         group: group,
       );
       if (!mounted) return;
-      Navigator.pop(context, session);
+      await _beginWaitingForGroup(session, group);
     } on WatchPartyException catch (error) {
       _showError(error.message);
     } catch (_) {
@@ -250,7 +343,8 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
   }
 
   void _back() {
-    if (_step == _LauncherStep.waitingFriend) {
+    if (_step == _LauncherStep.waitingFriend ||
+        _step == _LauncherStep.waitingGroup) {
       unawaited(_cancelWaiting());
       return;
     }
@@ -330,6 +424,7 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
       _LauncherStep.waitingFriend => 'بانتظار الموافقة',
       _LauncherStep.groups => 'مشاهدة مع مجموعة',
       _LauncherStep.createGroup => 'مجموعة جديدة',
+      _LauncherStep.waitingGroup => 'بانتظار المجموعة',
     };
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
@@ -425,6 +520,7 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
       _LauncherStep.waitingFriend => _waitingFriendBody(),
       _LauncherStep.groups => _groupList(),
       _LauncherStep.createGroup => _createGroup(),
+      _LauncherStep.waitingGroup => _waitingGroupBody(),
     };
   }
 
@@ -475,7 +571,7 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'التشغيل، الإيقاف، التقديم، الرجوع وتغيير الحلقة تتم مزامنتها فورياً. الصلاحيات تبدأ للجميع ويمكن للمضيف تعديلها من داخل الروم.',
+                    'تتم مزامنة أوامر الشريط فقط: التشغيل، الإيقاف، التقديم، الرجوع وتغيير الحلقة. فيديو كل عضو يعمل بشكل مستقل، لذلك التحميل أو الجودة عند شخص لا توقف بقية الروم.',
                     style: TextStyle(
                       color: Colors.white.withOpacity(.52),
                       fontSize: 11.5,
@@ -738,6 +834,258 @@ class _WatchPartyLauncherSheetState extends State<WatchPartyLauncherSheet> {
               ),
             ),
           ),
+      ],
+    );
+  }
+
+  Widget _waitingGroupBody() {
+    final session = _waitingSession;
+    final group = _waitingGroup;
+    if (session == null || group == null) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2.2));
+    }
+
+    final myUid = WatchPartyService.instance.currentUid;
+    final invitees = session.members
+        .where((member) => member.uid.isNotEmpty && member.uid != myUid)
+        .toList();
+    final acceptedCount = invitees
+        .where((member) => _waitingGroupStatuses[member.uid] == 'accepted')
+        .length;
+    final hasDeclined = invitees.any(
+      (member) => _waitingGroupStatuses[member.uid] == 'declined',
+    );
+    final hasError = invitees.any(
+      (member) => _waitingGroupStatuses[member.uid] == 'error',
+    );
+    final allAccepted = invitees.isNotEmpty && acceptedCount == invitees.length;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF8B74FF).withOpacity(.08),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: const Color(0xFF8B74FF).withOpacity(.18),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8B74FF).withOpacity(.14),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(
+                  Icons.groups_2_rounded,
+                  color: Color(0xFFB7A8FF),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      group.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      allAccepted
+                          ? 'وافق جميع الأعضاء — جاري فتح المشاهدة…'
+                          : hasDeclined
+                              ? 'أحد الأعضاء رفض الدعوة، ولن تبدأ الجلسة.'
+                              : '$acceptedCount من ${invitees.length} وافقوا • بانتظار البقية',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.5),
+                        fontSize: 11,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!allAccepted && !hasDeclined)
+                const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.025),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white.withOpacity(.055)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 62,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(13),
+                  color: Colors.white.withOpacity(.05),
+                ),
+                child: CinematyNetworkImage(
+                  url: widget.media.posterUrl,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.media.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'لن تبدأ المشاهدة حتى يوافق جميع أعضاء المجموعة.',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.42),
+                        fontSize: 10.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          'حالة الأعضاء',
+          style: TextStyle(
+            color: Colors.white.withOpacity(.58),
+            fontWeight: FontWeight.w900,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 8),
+        ...invitees.map((member) {
+          final status = _waitingGroupStatuses[member.uid] ?? 'pending';
+          final accepted = status == 'accepted';
+          final declined = status == 'declined';
+          final failed = status == 'error';
+          final color = accepted
+              ? const Color(0xFF45D483)
+              : (declined || failed)
+                  ? AppColors.redBright
+                  : const Color(0xFF8B74FF);
+          final label = accepted
+              ? 'وافق على الدعوة'
+              : declined
+                  ? 'رفض الدعوة'
+                  : failed
+                      ? 'تعذر تحديث الحالة'
+                      : 'بانتظار الرد';
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.025),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 21,
+                  backgroundColor: Colors.white.withOpacity(.06),
+                  backgroundImage: member.photoUrl.isNotEmpty
+                      ? NetworkImage(member.photoUrl)
+                      : null,
+                  child: member.photoUrl.isEmpty
+                      ? const Icon(Icons.person_rounded)
+                      : null,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        member.displayName.isNotEmpty
+                            ? member.displayName
+                            : 'مستخدم سينماتي',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        label,
+                        style: TextStyle(
+                          color: color.withOpacity(.9),
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (status == 'pending')
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.8,
+                      color: color,
+                    ),
+                  )
+                else
+                  Icon(
+                    accepted ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                    color: color,
+                    size: 22,
+                  ),
+              ],
+            ),
+          );
+        }),
+        if (hasError) ...[
+          const SizedBox(height: 4),
+          Text(
+            'الاتصال بحالة أحد الأعضاء تعذر مؤقتاً. تستطيع إلغاء الجلسة وإعادة المحاولة.',
+            style: TextStyle(
+              color: Colors.white.withOpacity(.42),
+              fontSize: 10.5,
+              height: 1.45,
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 52,
+          child: OutlinedButton.icon(
+            onPressed: allAccepted ? null : () => unawaited(_cancelWaiting()),
+            icon: const Icon(Icons.close_rounded),
+            label: Text(
+              hasDeclined ? 'إنهاء الدعوة والرجوع' : 'إلغاء دعوة المجموعة',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ),
       ],
     );
   }

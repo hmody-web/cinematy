@@ -158,6 +158,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                     future: _seasons!,
                     media: media,
                     onPlay: (episode) => _play(media, episode: episode),
+                    onWatchPartyEpisode: (episode) =>
+                        _startWatchParty(_episodeMedia(media, episode)),
                     onDownloadEpisode: (episode) => _downloadEpisode(media, episode),
                     onDownloadSeason: (episodes) => _downloadSeason(media, episodes),
                   ),
@@ -689,10 +691,18 @@ class _CastRail extends StatelessWidget {
 }
 
 class _SeasonsView extends ConsumerStatefulWidget {
-  const _SeasonsView({required this.future, required this.media, required this.onPlay, required this.onDownloadEpisode, required this.onDownloadSeason});
+  const _SeasonsView({
+    required this.future,
+    required this.media,
+    required this.onPlay,
+    required this.onWatchPartyEpisode,
+    required this.onDownloadEpisode,
+    required this.onDownloadSeason,
+  });
   final Future<List<SeasonGroup>> future;
   final MediaItem media;
   final ValueChanged<Episode> onPlay;
+  final ValueChanged<Episode> onWatchPartyEpisode;
   final ValueChanged<Episode> onDownloadEpisode;
   final ValueChanged<List<Episode>> onDownloadSeason;
 
@@ -794,12 +804,55 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
                     if (episode.description.isNotEmpty) ...[const SizedBox(height: 5), Text(episode.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withOpacity(.48), fontSize: 11.5))],
                   ])),
                   const SizedBox(width: 6),
-                  if (downloaded)
-                    const Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.download_done_rounded, color: AppColors.success), SizedBox(height: 2), Text('تم تحميلها', style: TextStyle(fontSize: 9.5, color: AppColors.success))])
-                  else if (downloading)
-                    SizedBox(width: 42, height: 42, child: Stack(alignment: Alignment.center, children: [CircularProgressIndicator(value: progress.clamp(0.0, 1.0).toDouble(), strokeWidth: 2.5), Text('${(progress * 100).round()}', style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w900))]))
-                  else
-                    IconButton(onPressed: () => widget.onDownloadEpisode(episode), icon: const Icon(Icons.download_rounded), tooltip: 'تنزيل الحلقة'),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        onPressed: () => widget.onWatchPartyEpisode(episode),
+                        icon: const Icon(Icons.groups_2_rounded),
+                        tooltip: 'مشاهدة الحلقة جماعياً',
+                      ),
+                      if (downloaded)
+                        const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.download_done_rounded, color: AppColors.success),
+                            SizedBox(height: 2),
+                            Text(
+                              'تم تحميلها',
+                              style: TextStyle(fontSize: 9.5, color: AppColors.success),
+                            ),
+                          ],
+                        )
+                      else if (downloading)
+                        SizedBox(
+                          width: 42,
+                          height: 42,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              CircularProgressIndicator(
+                                value: progress.clamp(0.0, 1.0).toDouble(),
+                                strokeWidth: 2.5,
+                              ),
+                              Text(
+                                '${(progress * 100).round()}',
+                                style: const TextStyle(
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        IconButton(
+                          onPressed: () => widget.onDownloadEpisode(episode),
+                          icon: const Icon(Icons.download_rounded),
+                          tooltip: 'تنزيل الحلقة',
+                        ),
+                    ],
+                  ),
                 ]),
               ),
             );

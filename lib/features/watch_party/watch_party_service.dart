@@ -458,6 +458,20 @@ class WatchPartyService {
     });
   }
 
+  Future<WatchPartyPlaybackState?> loadPlayback(String sessionId) async {
+    final snapshot = await _liveRoot(sessionId).child('state').get();
+    final value = snapshot.value;
+    if (value is! Map) return null;
+    return WatchPartyPlaybackState.fromJson(
+      Map<String, dynamic>.from(value),
+    );
+  }
+
+  Stream<bool> watchRealtimeConnection() =>
+      _database.ref('.info/connected').onValue.map(
+            (event) => event.snapshot.value == true,
+          ).distinct();
+
   Stream<List<WatchPartyPresence>> watchPresence(String sessionId) {
     return _liveRoot(sessionId).child('presence').onValue.map((event) {
       final value = event.snapshot.value;
@@ -598,7 +612,6 @@ class WatchPartyPresenceConnection {
   final WatchPartyMember _member;
   StreamSubscription<DatabaseEvent>? _connectionSub;
   bool _closed = false;
-  bool _buffering = false;
 
   DatabaseReference get _presence => _root.child('presence/${_member.uid}');
 
@@ -616,31 +629,15 @@ class WatchPartyPresenceConnection {
       await _presence.set({
         'displayName': _member.displayName,
         'state': 'active',
-        'buffering': _buffering,
         'updatedAt': ServerValue.timestamp,
       });
       await _presence.onDisconnect().set({
         'displayName': _member.displayName,
         'state': 'left',
-        'buffering': false,
         'updatedAt': ServerValue.timestamp,
       });
     } catch (error) {
       debugPrint('[WatchParty] presence connect failed: $error');
-    }
-  }
-
-  Future<void> setBuffering(bool value) async {
-    if (_closed || _buffering == value) return;
-    _buffering = value;
-    try {
-      await _presence.update({
-        'state': 'active',
-        'buffering': value,
-        'updatedAt': ServerValue.timestamp,
-      });
-    } catch (error) {
-      debugPrint('[WatchParty] buffering presence failed: $error');
     }
   }
 
@@ -664,7 +661,6 @@ class WatchPartyPresenceConnection {
       await _presence.set({
         'displayName': _member.displayName,
         'state': 'left',
-        'buffering': false,
         'updatedAt': ServerValue.timestamp,
       });
     } catch (_) {}

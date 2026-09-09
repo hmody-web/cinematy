@@ -351,14 +351,12 @@ class WatchPartyPresence {
     required this.uid,
     required this.displayName,
     required this.state,
-    required this.buffering,
     required this.updatedAtMs,
   });
 
   final String uid;
   final String displayName;
   final String state;
-  final bool buffering;
   final int updatedAtMs;
 
   bool get active => state == 'active';
@@ -368,8 +366,6 @@ class WatchPartyPresence {
         uid: uid,
         displayName: json['displayName']?.toString() ?? 'صديقك',
         state: json['state']?.toString() ?? 'active',
-        buffering:
-            json['buffering'] == true || json['buffering']?.toString() == '1',
         updatedAtMs: int.tryParse(json['updatedAt']?.toString() ?? '') ?? 0,
       );
 }

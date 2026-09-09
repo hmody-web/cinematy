@@ -112,9 +112,11 @@ class _NoticeEntryState extends State<_NoticeEntry> with SingleTickerProviderSta
     return Positioned(
       top: top,
       right: 14,
-      child: SafeArea(
-        bottom: false,
-        child: SlideTransition(
+      child: Material(
+        type: MaterialType.transparency,
+        child: SafeArea(
+          bottom: false,
+          child: SlideTransition(
           position: _slide,
           child: FadeTransition(
             opacity: _fade,
@@ -160,10 +162,10 @@ class _NoticeEntryState extends State<_NoticeEntry> with SingleTickerProviderSta
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w900, color: Colors.white)),
+                                Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w900, color: Colors.white, decoration: TextDecoration.none)),
                                 if (widget.message.isNotEmpty) ...[
                                   const SizedBox(height: 2),
-                                  Text(widget.message, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, height: 1.35, color: Colors.white.withOpacity(.58))),
+                                  Text(widget.message, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, height: 1.35, color: Colors.white.withOpacity(.58), decoration: TextDecoration.none)),
                                 ],
                               ],
                             ),
@@ -179,6 +181,7 @@ class _NoticeEntryState extends State<_NoticeEntry> with SingleTickerProviderSta
             ),
           ),
         ),
+      ),
       ),
     );
   }

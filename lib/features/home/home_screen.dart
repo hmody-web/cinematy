@@ -563,11 +563,16 @@ class _HeroCarouselState extends State<_HeroCarousel> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-        children: [
-          SizedBox(
-            height: 430,
-            child: PageView.builder(
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final bannerWidth = screenWidth * .91;
+    final bannerHeight = (bannerWidth * 9 / 16).clamp(190.0, 310.0).toDouble();
+
+    return Column(
+      children: [
+        SizedBox(
+          height: bannerHeight + 16,
+          child: PageView.builder(
               controller: _controller,
               itemCount: widget.items.length,
               onPageChanged: (value) => setState(() => _index = value),
@@ -586,7 +591,12 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          CinematyNetworkImage(url: image, memCacheWidth: 1800),
+                          const ColoredBox(color: Color(0xFF070707)),
+                          CinematyNetworkImage(
+                            url: image,
+                            memCacheWidth: 1800,
+                            fit: BoxFit.contain,
+                          ),
                           const DecoratedBox(
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
@@ -602,9 +612,9 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                             ),
                           ),
                           Positioned(
-                            right: 22,
-                            left: 22,
-                            bottom: 22,
+                            right: 16,
+                            left: 16,
+                            bottom: 14,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -625,30 +635,18 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 12),
+                                const SizedBox(height: 8),
                                 Text(
                                   item.title,
-                                  maxLines: 2,
+                                  maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                    fontSize: 29,
+                                    fontSize: 21,
                                     fontWeight: FontWeight.w900,
-                                    height: 1.08,
+                                    height: 1.05,
                                   ),
                                 ),
-                                if (item.description.isNotEmpty) ...[
-                                  const SizedBox(height: 9),
-                                  Text(
-                                    item.description,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(.72),
-                                      height: 1.45,
-                                    ),
-                                  ),
-                                ],
-                                const SizedBox(height: 16),
+                                const SizedBox(height: 9),
                                 Row(
                                   children: [
                                     FilledButton.icon(
@@ -657,8 +655,8 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                                         backgroundColor: Colors.white,
                                         foregroundColor: AppColors.background,
                                         padding: const EdgeInsets.symmetric(
-                                          horizontal: 18,
-                                          vertical: 12,
+                                          horizontal: 14,
+                                          vertical: 9,
                                         ),
                                       ),
                                       icon: const Icon(Icons.play_arrow_rounded),
@@ -704,6 +702,7 @@ class _HeroCarouselState extends State<_HeroCarousel> {
           ),
         ],
       );
+  }
 }
 
 class _HeroPill extends StatelessWidget {
@@ -758,7 +757,7 @@ class _HomeSkeleton extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(18),
               child: AspectRatio(
-                aspectRatio: 1.05,
+                aspectRatio: 16 / 9,
                 child: SkeletonBox(radius: 30),
               ),
             ),

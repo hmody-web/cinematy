@@ -56,27 +56,13 @@ class LibraryScreen extends ConsumerWidget {
             child: _LibraryAccountCard(),
           ),
           const SectionHeader(
-            title: 'المفضلة',
-            subtitle: 'الأعمال التي حفظتها للوصول السريع',
-          ),
-          if (favorites.isEmpty)
-            const SizedBox(
-              height: 170,
-              child: EmptyState(
-                icon: Icons.bookmark_border_rounded,
-                title: 'مفضلتك فارغة',
-                message: 'احفظ أي فيلم أو مسلسل حتى يرجع هنا.',
-              ),
-            )
-          else
-            _Rail(items: favorites, library: library, showProgress: false),
-          const SectionHeader(
             title: 'مكتبتي',
             subtitle: 'تنزيلاتك وقوائمك وإعدادات المشاهدة',
           ),
           _LibraryQuickGrid(
             downloadsCount: downloads.items.length + downloads.activeItems.length,
             laterCount: later.length,
+            favoritesCount: favorites.length,
             onDownloads: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const DownloadsScreen()),
@@ -85,15 +71,20 @@ class LibraryScreen extends ConsumerWidget {
               context,
               MaterialPageRoute(builder: (_) => const WatchLaterScreen()),
             ),
-            onSubtitles: () => Navigator.push(
+            onFavorites: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const SubtitleSettingsScreen()),
+              MaterialPageRoute(builder: (_) => const FavoritesScreen()),
             ),
           ),
           const SectionHeader(title: 'حول سينماتي'),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 18),
-            child: _DeveloperCard(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            child: _AboutCinematyCard(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AboutCinematyScreen()),
+              ),
+            ),
           ),
           const SectionHeader(title: 'التطبيق'),
           Padding(
@@ -182,6 +173,66 @@ class LibraryScreen extends ConsumerWidget {
         type: AppNoticeType.success,
       );
     }
+  }
+}
+
+class _AboutCinematyCard extends StatelessWidget {
+  const _AboutCinematyCard({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(24),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.035),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withOpacity(.065)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.045),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const BrandLogo(size: 34),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'حول سينماتي',
+                      style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'معلومات التطبيق والمطور',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.46),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_left_rounded, color: Colors.white54),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -486,14 +537,16 @@ class _LibraryQuickGrid extends StatelessWidget {
     required this.laterCount,
     required this.onDownloads,
     required this.onLater,
-    required this.onSubtitles,
+    required this.favoritesCount,
+    required this.onFavorites,
   });
 
   final int downloadsCount;
   final int laterCount;
+  final int favoritesCount;
   final VoidCallback onDownloads;
   final VoidCallback onLater;
-  final VoidCallback onSubtitles;
+  final VoidCallback onFavorites;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -520,10 +573,10 @@ class _LibraryQuickGrid extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: _QuickCard(
-                icon: Icons.closed_caption_rounded,
-                title: 'الترجمة',
-                subtitle: 'تخصيص كامل',
-                onTap: onSubtitles,
+                icon: Icons.bookmark_rounded,
+                title: 'المفضلة',
+                subtitle: '$favoritesCount عمل',
+                onTap: onFavorites,
               ),
             ),
           ],
@@ -808,6 +861,67 @@ class _ActiveDownloadCard extends StatelessWidget {
           ],
         ),
       );
+}
+
+class AboutCinematyScreen extends StatelessWidget {
+  const AboutCinematyScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: CinematyTopBar(
+        section: 'حول سينماتي',
+        showQuickActions: false,
+        onBack: () => Navigator.pop(context),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 34),
+        children: const [
+          _DeveloperCard(),
+        ],
+      ),
+    );
+  }
+}
+
+class FavoritesScreen extends ConsumerWidget {
+  const FavoritesScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final items = ref.watch(libraryProvider).favoriteItems();
+    return Scaffold(
+      appBar: CinematyTopBar(
+        section: 'المفضلة',
+        showQuickActions: false,
+        onBack: () => Navigator.pop(context),
+      ),
+      body: items.isEmpty
+          ? const EmptyState(
+              icon: Icons.bookmark_border_rounded,
+              title: 'المفضلة فارغة',
+              message: 'الأعمال التي تحفظها في المفضلة ستظهر هنا.',
+            )
+          : GridView.builder(
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
+              itemCount: items.length,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 16,
+                childAspectRatio: .52,
+              ),
+              itemBuilder: (_, i) => MediaPosterCard(
+                item: items[i],
+                width: double.infinity,
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => DetailsScreen(item: items[i])),
+                ),
+              ),
+            ),
+    );
+  }
 }
 
 class WatchLaterScreen extends ConsumerWidget {

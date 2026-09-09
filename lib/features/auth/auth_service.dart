@@ -2,6 +2,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import '../../data/services/cinematy_account_api.dart';
+
 class CinematyAuthException implements Exception {
   const CinematyAuthException(this.message);
 
@@ -85,6 +87,12 @@ class AuthService {
 
       final UserCredential result =
           await _auth.signInWithCredential(credential);
+
+      try {
+        await CinematyAccountApi.instance.syncProfile();
+      } catch (error) {
+        debugPrint('[Cinematy Account] Initial profile sync failed: $error');
+      }
 
       debugPrint(
         '[Cinematy Auth] Google/Firebase sign-in success '

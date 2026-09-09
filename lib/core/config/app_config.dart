@@ -7,6 +7,7 @@ class AppConfig {
   /// المصدر الوحيد حالياً. لاحقاً يمكن استبداله بـ Remote Config بدون تعديل الواجهة.
   static const baseUrl = 'https://cinemana.shabakaty.cc';
   static const recommendationBaseUrl = 'https://recommend.shabakaty.cc';
+  static const accountApiBaseUrl = 'https://scrptaty.com/apps/cinematy/api/';
 
   static const language = 'ar';
   static const requestTimeout = Duration(seconds: 15);

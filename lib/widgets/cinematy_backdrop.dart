@@ -17,8 +17,8 @@ class CinematyBackdrop extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Color(0xFF0B0606),
-                Color(0xFF070505),
+                Color(0xFF090707),
+                Color(0xFF070606),
               ],
             ),
           ),
@@ -28,17 +28,17 @@ class CinematyBackdrop extends StatelessWidget {
               Positioned(
                 top: -135,
                 right: -115,
-                child: _GlowOrb(size: 380, opacity: .24),
+                child: _GlowOrb(size: 380, opacity: .080),
               ),
               Positioned(
                 top: 300,
                 left: -150,
-                child: _GlowOrb(size: 340, opacity: .14),
+                child: _GlowOrb(size: 340, opacity: .045),
               ),
               Positioned(
                 bottom: -190,
                 right: -150,
-                child: _GlowOrb(size: 420, opacity: .085),
+                child: _GlowOrb(size: 420, opacity: .025),
               ),
             ],
           ),
@@ -69,7 +69,7 @@ class _GlowOrb extends StatelessWidget {
             stops: const [0, .42, 1],
             colors: [
               AppColors.redBright.withOpacity(opacity),
-              AppColors.red.withOpacity(opacity * .36),
+              AppColors.red.withOpacity(opacity * .24),
               Colors.transparent,
             ],
           ),

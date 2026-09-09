@@ -182,12 +182,14 @@ class _AccountQuickActionState extends State<_AccountQuickAction> {
       context: context,
       barrierDismissible: true,
       barrierLabel: 'الحساب',
-      barrierColor: Colors.black.withOpacity(.22),
+      barrierColor: Colors.transparent,
       transitionDuration: const Duration(milliseconds: 180),
       pageBuilder: (dialogContext, _, __) {
         final screen = MediaQuery.sizeOf(dialogContext);
-        const cardWidth = 306.0;
-        final maxLeft = (screen.width - cardWidth - 12).clamp(12.0, double.infinity).toDouble();
+        final cardWidth = screen.width < 310 ? screen.width - 24 : 268.0;
+        final maxLeft = (screen.width - cardWidth - 12)
+            .clamp(12.0, double.infinity)
+            .toDouble();
         final left = (position.dx - 2).clamp(12.0, maxLeft).toDouble();
         return Material(
           color: Colors.transparent,
@@ -212,9 +214,9 @@ class _AccountQuickActionState extends State<_AccountQuickAction> {
                     child: Column(
                       children: [
                         Align(
-                          alignment: Alignment.centerRight,
+                          alignment: Alignment.centerLeft,
                           child: Padding(
-                            padding: const EdgeInsets.only(right: 24),
+                            padding: const EdgeInsets.only(left: 24),
                             child: Transform.rotate(
                               angle: .785398,
                               child: Container(
@@ -226,7 +228,7 @@ class _AccountQuickActionState extends State<_AccountQuickAction> {
                                     top: BorderSide(
                                       color: Colors.white.withOpacity(.09),
                                     ),
-                                    right: BorderSide(
+                                    left: BorderSide(
                                       color: Colors.white.withOpacity(.09),
                                     ),
                                   ),
@@ -257,7 +259,7 @@ class _AccountQuickActionState extends State<_AccountQuickAction> {
           scale: Tween<double>(begin: .965, end: 1).animate(
             CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
           ),
-          alignment: Alignment.topRight,
+          alignment: Alignment.topLeft,
           child: child,
         ),
       ),
@@ -365,9 +367,34 @@ class _AccountPopoverBodyState extends State<_AccountPopoverBody> {
 
   Future<void> _signOut() async {
     if (_busy) return;
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: widget.rootContext,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => const _TopSignOutSheet(),
+    );
+    if (confirmed != true || !mounted) return;
+
     setState(() => _busy = true);
     try {
       await AuthService.instance.signOut();
+      if (!mounted) return;
+      AppNotice.show(
+        widget.rootContext,
+        title: 'تم تسجيل الخروج',
+        message: 'يمكنك تسجيل الدخول مجدداً في أي وقت.',
+        type: AppNoticeType.info,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      AppNotice.show(
+        widget.rootContext,
+        title: 'تعذر تسجيل الخروج',
+        message: 'حاول مرة أخرى.',
+        type: AppNoticeType.error,
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -381,14 +408,14 @@ class _AccountPopoverBodyState extends State<_AccountPopoverBody> {
       builder: (context, snapshot) {
         final user = snapshot.data;
         return ClipRRect(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(20),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
             child: Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
                 color: const Color(0xFF171719).withOpacity(.97),
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: Colors.white.withOpacity(.09)),
                 boxShadow: [
                   BoxShadow(
@@ -427,7 +454,7 @@ class _AccountPopoverBodyState extends State<_AccountPopoverBody> {
                   children: [
                     Text(
                       'حساب سينماتي',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
                     ),
                     SizedBox(height: 2),
                     Text(
@@ -445,7 +472,7 @@ class _AccountPopoverBodyState extends State<_AccountPopoverBody> {
             style: FilledButton.styleFrom(
               backgroundColor: Colors.white,
               foregroundColor: Colors.black,
-              minimumSize: const Size.fromHeight(45),
+              minimumSize: const Size.fromHeight(42),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
             ),
             child: _busy
@@ -478,8 +505,8 @@ class _AccountPopoverBodyState extends State<_AccountPopoverBody> {
         Row(
           children: [
             Container(
-              width: 52,
-              height: 52,
+              width: 46,
+              height: 46,
               padding: const EdgeInsets.all(1.5),
               decoration: const BoxDecoration(
                 shape: BoxShape.circle,
@@ -510,7 +537,7 @@ class _AccountPopoverBodyState extends State<_AccountPopoverBody> {
                               : 'حساب سينماتي',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
                         ),
                       ),
                       const SizedBox(width: 5),
@@ -561,6 +588,95 @@ class _AccountPopoverBodyState extends State<_AccountPopoverBody> {
           ),
         ),
       ],
+    );
+  }
+}
+
+
+class _TopSignOutSheet extends StatelessWidget {
+  const _TopSignOutSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(26),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            decoration: BoxDecoration(
+              color: const Color(0xF2191515),
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(color: Colors.white.withOpacity(.09)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.logout_rounded,
+                  size: 32,
+                  color: AppColors.redBright,
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'تسجيل الخروج؟',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'سيبقى محتواك المحلي محفوظاً، ويمكنك تسجيل الدخول بالحساب نفسه لاحقاً.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.52),
+                    fontSize: 11.5,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 17),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                          side: BorderSide(color: Colors.white.withOpacity(.10)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: const Text(
+                          'إلغاء',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                          backgroundColor: AppColors.redBright,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        child: const Text(
+                          'تسجيل الخروج',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

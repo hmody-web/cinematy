@@ -47,6 +47,31 @@ class AppSettingsScreen extends ConsumerWidget {
           const SizedBox(height: 12),
           _SettingsCard(
             child: Column(
+              children: [
+                const ListTile(
+                  leading: _IconBox(Icons.high_quality_rounded),
+                  title: Text('جودة التشغيل الافتراضية', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: Text('تُستخدم تلقائياً في كل مشغلات سينماتي'),
+                ),
+                const Divider(height: 1),
+                ...[2160, 1440, 1080, 720, 480, 360].map(
+                  (q) => RadioListTile<int>(
+                    value: q,
+                    groupValue: settings.preferredVideoQuality,
+                    title: Text('${q}p', style: const TextStyle(fontWeight: FontWeight.w800)),
+                    subtitle: q == 1080 ? const Text('الافتراضي الموصى به') : null,
+                    activeColor: AppColors.redBright,
+                    onChanged: (value) {
+                      if (value != null) ref.read(appSettingsProvider).setPreferredVideoQuality(value);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          _SettingsCard(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const ListTile(

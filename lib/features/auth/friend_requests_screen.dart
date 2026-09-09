@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/friend_request.dart';
 import '../../data/services/cinematy_account_api.dart';
@@ -98,7 +99,7 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
       final session = await WatchPartyService.instance.acceptInvite(invite);
       if (!mounted) return;
       Navigator.of(context).push(
-        MaterialPageRoute(
+        CinematyPageRoute(
           builder: (_) => PlayerScreen(
             media: session.media,
             watchPartySessionId: session.id,
@@ -266,7 +267,7 @@ class _FriendRequestsScreenState extends State<FriendRequestsScreen> {
                   if (handle == null || handle.isEmpty) return;
                   Navigator.push(
                     context,
-                    MaterialPageRoute(
+                    CinematyPageRoute(
                       builder: (_) => UserProfileScreen(handle: handle),
                     ),
                   );

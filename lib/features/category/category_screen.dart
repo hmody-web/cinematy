@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../data/models/category.dart';
 import '../../data/models/media_item.dart';
 import '../../providers.dart';
@@ -108,11 +109,11 @@ class _CategoryScreenState extends ConsumerState<CategoryScreen> {
         onBack: () => Navigator.pop(context),
         onContinue: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+          CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
         ),
         onDownloads: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+          CinematyPageRoute(builder: (_) => const DownloadsScreen()),
         ),
       ),
       body: _items.isEmpty && _loading
@@ -139,7 +140,7 @@ class _CategoryScreenState extends ConsumerState<CategoryScreen> {
                       item: item,
                       width: double.infinity,
                       onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => DetailsScreen(item: item)),
+                        CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
                       ),
                     );
                   },

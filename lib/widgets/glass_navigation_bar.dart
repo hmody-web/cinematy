@@ -108,7 +108,7 @@ class NativeIosTabBarController {
   }) {
     if (!Platform.isIOS) return;
     _hostAttached = true;
-    _index = index.clamp(0, 3).toInt();
+    _index = index.clamp(0, 4).toInt();
     _compact = compact;
     _onChanged = onChanged;
     _installHandler();
@@ -121,7 +121,7 @@ class NativeIosTabBarController {
     required ValueChanged<int> onChanged,
   }) {
     if (!Platform.isIOS) return;
-    _index = index.clamp(0, 3).toInt();
+    _index = index.clamp(0, 4).toInt();
     _compact = compact;
     _onChanged = onChanged;
     _installHandler();
@@ -149,7 +149,7 @@ class NativeIosTabBarController {
       if (call.method != 'tabChanged') return;
       final raw = call.arguments;
       final value = raw is int ? raw : int.tryParse('$raw');
-      if (value == null || value < 0 || value > 3) return;
+      if (value == null || value < 0 || value > 4) return;
       _onChanged?.call(value);
     });
   }
@@ -212,7 +212,7 @@ class NativeAndroidLiquidGlassController {
   }) {
     if (!Platform.isAndroid) return;
     _hostAttached = true;
-    _index = index.clamp(0, 3).toInt();
+    _index = index.clamp(0, 4).toInt();
     _compact = compact;
     _fontFamily = fontFamily;
     _onChanged = onChanged;
@@ -227,7 +227,7 @@ class NativeAndroidLiquidGlassController {
     required ValueChanged<int> onChanged,
   }) {
     if (!Platform.isAndroid) return;
-    _index = index.clamp(0, 3).toInt();
+    _index = index.clamp(0, 4).toInt();
     _compact = compact;
     _fontFamily = fontFamily;
     _onChanged = onChanged;
@@ -256,7 +256,7 @@ class NativeAndroidLiquidGlassController {
       if (call.method != 'tabChanged') return;
       final raw = call.arguments;
       final value = raw is int ? raw : int.tryParse('$raw');
-      if (value == null || value < 0 || value > 3) return;
+      if (value == null || value < 0 || value > 4) return;
       _onChanged?.call(value);
     });
   }

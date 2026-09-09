@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/cinematy_user.dart';
 import '../../data/models/media_item.dart';
@@ -148,11 +149,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         downloadsCount: downloads.items.length + downloads.activeItems.length,
         onContinue: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+          CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
         ),
         onDownloads: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+          CinematyPageRoute(builder: (_) => const DownloadsScreen()),
         ),
       ),
       body: CustomScrollView(
@@ -244,7 +245,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                   FilledButton.icon(
                     onPressed: () => Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const AccountScreen()),
+                      CinematyPageRoute(builder: (_) => const AccountScreen()),
                     ),
                     icon: const Icon(Icons.login_rounded),
                     label: const Text('تسجيل الدخول'),
@@ -329,7 +330,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 if (handle == null || handle.isEmpty) return;
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
+                  CinematyPageRoute(
                     builder: (_) => UserProfileScreen(handle: handle),
                   ),
                 );
@@ -430,7 +431,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               item: item,
               width: double.infinity,
               onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => DetailsScreen(item: item)),
+                CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
               ),
             );
           },

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/category.dart';
 import '../../data/models/media_item.dart';
@@ -27,11 +28,11 @@ class DiscoverScreen extends ConsumerWidget {
         downloadsCount: downloads.items.length + downloads.activeItems.length,
         onContinue: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+          CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
         ),
         onDownloads: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+          CinematyPageRoute(builder: (_) => const DownloadsScreen()),
         ),
       ),
       body: categories.when(
@@ -99,7 +100,7 @@ class _CategoryMosaicCard extends ConsumerWidget {
       onTap: () {
         final ready = ref.read(apiProvider).categoryCachedVideos(category.id);
         Navigator.of(context).push(
-          MaterialPageRoute(
+          CinematyPageRoute(
             builder: (_) => CategoryScreen(category: category, initialItems: ready),
           ),
         );

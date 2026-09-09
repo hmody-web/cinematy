@@ -11,6 +11,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/download_item.dart';
@@ -72,6 +73,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   Timer? _partyHeartbeatTimer;
   Timer? _partyMessageTimer;
   Timer? _partyPresenceNoticeTimer;
+  Timer? _partyDriftRestoreTimer;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -92,6 +94,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   WatchPartyPresenceConnection? _watchPartyPresenceConnection;
   WatchPartyPlaybackState? _pendingPartyState;
   final Map<String, String> _partyPresenceStates = <String, String>{};
+  final Map<String, bool> _partyPlayerReadyStates = <String, bool>{};
   bool _partyReady = false;
   bool _partyInitialSyncDone = false;
   bool _partyApplyingRemote = false;
@@ -155,7 +158,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final session = _watchPartySession;
     if (session == null || session.memberUids.isEmpty) return false;
     return session.memberUids.every(
-      (uid) => _partyPresenceStates[uid] == 'active',
+      (uid) => _partyPresenceStates[uid] == 'active' && _partyPlayerReadyStates[uid] == true,
     );
   }
 
@@ -276,7 +279,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
       _partyHeartbeatTimer?.cancel();
       _partyHeartbeatTimer = Timer.periodic(
-        const Duration(seconds: 2),
+        const Duration(milliseconds: 500),
         (_) => unawaited(_publishPartyHeartbeat()),
       );
 
@@ -305,7 +308,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final session = _watchPartySession;
     if (session == null || session.ended) return;
 
-    // لا يبدأ الروم لأول مرة إلا بعد أن يكون جميع الأعضاء داخل المشغل فعلياً.
+    try {
+      await _watchPartyService.markPlayerReady(
+        sessionId: session.id,
+        mediaId: widget.media.id,
+        position: _player.state.position,
+      );
+    } catch (_) {}
+
+    // لا يبدأ الروم لأول مرة إلا بعد أن يكون جميع الأعضاء داخل المشغل فعلياً
+    // وكل مشغل أنهى فتح المصدر وصار قابلاً للتشغيل.
     // بعد بدء الجلسة، أي انقطاع لاحق لأي عضو لا يوقف فيديو الآخرين إطلاقاً.
     if (!_allPartyMembersActive) {
       _showPartyOverlay(
@@ -323,9 +335,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     if (_isPartyHost) {
       _partyDesiredPlaying = true;
       try {
-        await _player.play();
-      } catch (_) {}
-      try {
+        final now = await _watchPartyService.serverNowMs();
+        final executeAt = now + 700;
+        await _player.pause();
         await _watchPartyService.publishPlayback(
           sessionId: session.id,
           action: 'play',
@@ -333,7 +345,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           playing: true,
           playbackRate: _playbackRate,
           media: widget.media,
+          executeAtMs: executeAt,
         );
+        await _executePartyPlayAt(executeAt, _player.state.position);
       } catch (error) {
         debugPrint('[WatchParty] initial host state failed: $error');
       }
@@ -362,15 +376,53 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
   }
 
+  Future<void> _executePartyPlayAt(int executeAtMs, Duration basePosition) async {
+    if (executeAtMs <= 0) {
+      await _player.play();
+      return;
+    }
+    final now = await _watchPartyService.serverNowMs();
+    final waitMs = executeAtMs - now;
+    if (waitMs > 0) {
+      await Future<void>.delayed(Duration(milliseconds: waitMs));
+    }
+    if (!_player.state.playing) await _player.play();
+  }
+
+  Future<void> _softCorrectPartyDrift(int targetMs) async {
+    if (_switchingSource || _scrubbing) return;
+    final localMs = _player.state.position.inMilliseconds;
+    final signedDrift = targetMs - localMs;
+    final absDrift = signedDrift.abs();
+    if (absDrift < 90) return;
+
+    // الانحراف الصغير يتصحح بنعومة عبر تعديل سرعة مؤقت ضئيل جداً، بدون seek
+    // وبدون أي تقطيع ملحوظ. الانحراف الكبير فقط يحتاج قفزة مباشرة.
+    if (absDrift <= 700 && _player.state.playing) {
+      final correctionRate = (_playbackRate * (signedDrift > 0 ? 1.018 : .982))
+          .clamp(.5, 2.0)
+          .toDouble();
+      await _player.setRate(correctionRate);
+      _partyDriftRestoreTimer?.cancel();
+      _partyDriftRestoreTimer = Timer(const Duration(milliseconds: 650), () {
+        if (mounted && !_switchingSource) {
+          unawaited(_player.setRate(_playbackRate));
+        }
+      });
+      return;
+    }
+    if (absDrift > 700) {
+      await _player.seek(Duration(milliseconds: targetMs));
+      if (mounted && !_scrubbing) setState(() => _position = Duration(milliseconds: targetMs));
+    }
+  }
+
   Future<void> _handleRemotePartyState(WatchPartyPlaybackState state) async {
     _pendingPartyState = state;
     _partyDesiredPlaying = state.playing;
     if (!_partyReady || _loading || _initializingPlayback || !mounted) return;
     if (state.sourceUid == _watchPartyService.currentUid) return;
 
-    // Heartbeat يحفظ فقط موضع الروم في Firebase حتى نعرف أين نعيد العضو
-    // بعد انقطاع الاتصال. لا يلمس الفيديو ولا يعمل seek أثناء المشاهدة.
-    if (state.action == 'heartbeat') return;
     await _applyRemotePartyState(state);
   }
 
@@ -393,8 +445,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     // المزامنة هنا خاصة بالشريط وأوامر المشغل فقط. لا توجد أي علاقة
     // بالـ buffering أو جودة الفيديو أو سرعة تحميل أي عضو آخر.
-    if (state.action == 'heartbeat' && !forceSync) return;
-
     _partyApplyingRemote = true;
     try {
       final isSpeedEvent = state.action == 'speed';
@@ -409,7 +459,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         if (mounted) setState(() => _playbackRate = state.playbackRate);
       }
 
-      final now = DateTime.now().millisecondsSinceEpoch;
+      final now = await _watchPartyService.serverNowMs();
       final elapsedMs = state.playing && state.updatedAtMs > 0
           ? (now - state.updatedAtMs).clamp(0, 5000).toInt()
           : 0;
@@ -427,11 +477,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // seek حقيقي يحصل فقط عند أمر من المستخدم، عند الدخول الأول، أو بعد
       // عودة اتصال عضو. لا توجد تصحيحات دورية قد تسبب تقطيعاً للفيديو.
       final shouldSeek = forceSync || isInitialSync || isSeekEvent;
-      if (shouldSeek && drift > (isSeekEvent || forceSync ? 180 : 900)) {
+      if (shouldSeek && drift > (isSeekEvent || forceSync ? 90 : 350)) {
         await _player.seek(Duration(milliseconds: targetMs));
         if (mounted && !_scrubbing) {
           setState(() => _position = Duration(milliseconds: targetMs));
         }
+      } else if (state.action == 'heartbeat' && state.playing) {
+        await _softCorrectPartyDrift(targetMs);
       }
 
       if (isSpeedEvent) {
@@ -444,7 +496,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           state.action == 'seek' ||
           isInitialSync) {
         if (state.playing) {
-          if (!_player.state.playing) await _player.play();
+          if (!_player.state.playing) {
+            if (state.executeAtMs > 0) {
+              await _executePartyPlayAt(state.executeAtMs, Duration(milliseconds: targetMs));
+            } else {
+              await _player.play();
+            }
+          }
         } else {
           if (_player.state.playing) await _player.pause();
         }
@@ -466,7 +524,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     if (connection != null) await connection.handoff();
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
+      CinematyPageRoute(
         builder: (_) => PlayerScreen(
           media: media,
           watchPartySessionId: widget.watchPartySessionId,
@@ -484,6 +542,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     for (final item in presence) {
       final previous = _partyPresenceStates[item.uid];
       _partyPresenceStates[item.uid] = item.state;
+      _partyPlayerReadyStates[item.uid] = item.ready;
       if (item.uid == currentUid || previous == null) continue;
 
       if (previous == 'active' && item.state == 'left') {
@@ -530,6 +589,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           playing: _player.state.playing,
           playbackRate: _playbackRate,
         );
+        await _watchPartyService.markPlayerReady(
+          sessionId: session.id,
+          mediaId: widget.media.id,
+          position: _player.state.position,
+        );
         return;
       }
 
@@ -540,6 +604,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         _partyDesiredPlaying = state.playing;
         await _applyRemotePartyState(state, forceSync: true);
       }
+      await _watchPartyService.markPlayerReady(
+        sessionId: session.id,
+        mediaId: widget.media.id,
+        position: _player.state.position,
+      );
     } catch (error) {
       debugPrint('[WatchParty] reconnect sync failed: $error');
     } finally {
@@ -1270,8 +1339,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       return 1;
     }
 
-    final copy = [...sources]..sort((a, b) => score(b).compareTo(score(a)));
-    return copy.first;
+    final preferred = ref.read(appSettingsProvider).preferredVideoQuality;
+    final exact = sources.where((s) => score(s) == preferred).toList();
+    if (exact.isNotEmpty) return exact.first;
+
+    // إذا الجودة المختارة غير متوفرة نأخذ أقرب جودة أقل منها لتجنب
+    // تشغيل جودة أعلى من اختيار المستخدم واستهلاك إنترنت إضافي.
+    final lower = sources.where((s) => score(s) < preferred).toList()
+      ..sort((a, b) => score(b).compareTo(score(a)));
+    if (lower.isNotEmpty) return lower.first;
+
+    final higher = [...sources]..sort((a, b) => score(a).compareTo(score(b)));
+    return higher.first;
   }
 
   Future<void> _waitForPlayableDuration({
@@ -1478,22 +1557,41 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final shouldPlay = _inWatchParty
         ? !_partyDesiredPlaying
         : !_player.state.playing;
-    if (shouldPlay) {
-      await _player.play();
-    } else {
-      await _player.pause();
-    }
     if (_inWatchParty && _partyReady && _watchPartySession != null) {
       _partyDesiredPlaying = shouldPlay;
-      try {
-        await _watchPartyService.publishPlayback(
+      if (shouldPlay) {
+        try {
+          final now = await _watchPartyService.serverNowMs();
+          final executeAt = now + 220;
+          unawaited(_watchPartyService.publishPlayback(
+            sessionId: _watchPartySession!.id,
+            action: 'play',
+            position: _player.state.position,
+            playing: true,
+            playbackRate: _playbackRate,
+            executeAtMs: executeAt,
+          ));
+          await _executePartyPlayAt(executeAt, _player.state.position);
+        } catch (_) {
+          await _player.play();
+        }
+      } else {
+        // الإيقاف محلياً فوراً، وإرسال الحدث بالخلفية بدون انتظار الشبكة.
+        await _player.pause();
+        unawaited(_watchPartyService.publishPlayback(
           sessionId: _watchPartySession!.id,
-          action: shouldPlay ? 'play' : 'pause',
+          action: 'pause',
           position: _player.state.position,
-          playing: shouldPlay,
+          playing: false,
           playbackRate: _playbackRate,
-        );
-      } catch (_) {}
+        ));
+      }
+    } else {
+      if (shouldPlay) {
+        await _player.play();
+      } else {
+        await _player.pause();
+      }
     }
     _scheduleHide();
   }
@@ -1837,7 +1935,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     if (!mounted) return;
     final downloaded = ref.read(downloadProvider).itemFor(episode.id);
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
+      CinematyPageRoute(
         builder: (_) => PlayerScreen(
           media: media,
           localPath: _inWatchParty ? null : downloaded?.localPath,
@@ -1909,6 +2007,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _partyHeartbeatTimer?.cancel();
     _partyMessageTimer?.cancel();
     _partyPresenceNoticeTimer?.cancel();
+    _partyDriftRestoreTimer?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
     _bufferingSub?.cancel();
@@ -2172,7 +2271,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                 tooltip: 'شكل الترجمة',
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(
+                  CinematyPageRoute(
                     builder: (_) => const SubtitleSettingsScreen(),
                   ),
                 ),
@@ -2314,6 +2413,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           Navigator.pop(context);
           if (source.url == _selectedSource?.url) return;
           await _openSource(source, preservePosition: true);
+          if (_inWatchParty && _watchPartySession != null) {
+            try {
+              final roomState = await _watchPartyService.loadPlayback(_watchPartySession!.id);
+              if (roomState != null) await _applyRemotePartyState(roomState, forceSync: true);
+            } catch (_) {}
+          }
         },
       ),
     );

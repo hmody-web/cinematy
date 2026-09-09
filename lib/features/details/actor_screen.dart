@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../data/models/content_details.dart';
 import '../../data/models/media_item.dart';
 import '../../providers.dart';
@@ -44,11 +45,11 @@ class _ActorScreenState extends ConsumerState<ActorScreen> {
         onBack: () => Navigator.pop(context),
         onContinue: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+          CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
         ),
         onDownloads: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+          CinematyPageRoute(builder: (_) => const DownloadsScreen()),
         ),
       ),
       body: CustomScrollView(
@@ -172,7 +173,7 @@ class _ActorScreenState extends ConsumerState<ActorScreen> {
                     item: items[i],
                     width: double.infinity,
                     onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
+                      CinematyPageRoute(
                         builder: (_) => DetailsScreen(item: items[i]),
                       ),
                     ),

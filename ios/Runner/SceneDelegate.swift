@@ -133,7 +133,8 @@ final class SceneDelegate: FlutterSceneDelegate, UITabBarDelegate {
       makeItem(title: "الرئيسية", normal: "house", selected: "house.fill", tag: 0),
       makeItem(title: "اكتشف", normal: "safari", selected: "safari.fill", tag: 1),
       makeItem(title: "البحث", normal: "magnifyingglass", selected: "magnifyingglass", tag: 2),
-      makeItem(title: "مكتبتي", normal: "rectangle.stack", selected: "rectangle.stack.fill", tag: 3),
+      makeItem(title: "التلفاز", normal: "tv", selected: "tv.fill", tag: 3),
+      makeItem(title: "مكتبتي", normal: "rectangle.stack", selected: "rectangle.stack.fill", tag: 4),
     ]
 
     let normalAttributes: [NSAttributedString.Key: Any] = [

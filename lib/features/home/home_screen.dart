@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/download_item.dart';
 import '../../data/models/media_item.dart';
@@ -84,7 +85,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         activeDownloads: downloads.activeItems.length,
         onRetry: () => _refresh(ref),
         onOpenDownload: (item) => Navigator.of(context).push(
-          MaterialPageRoute(
+          CinematyPageRoute(
             builder: (_) => PlayerScreen(
               media: item.media,
               localPath: item.localPath,
@@ -93,11 +94,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
         onContinue: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+          CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
         ),
         onDownloads: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+          CinematyPageRoute(builder: (_) => const DownloadsScreen()),
         ),
       );
     }
@@ -111,11 +112,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           downloadsCount: downloads.items.length + downloads.activeItems.length,
           onContinue: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+            CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
           ),
           onDownloads: () => Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+            CinematyPageRoute(builder: (_) => const DownloadsScreen()),
           ),
         ),
         error: (error, _) => CustomScrollView(
@@ -125,11 +126,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               downloads.items.length + downloads.activeItems.length,
               onContinue: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+                CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
               ),
               onDownloads: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+                CinematyPageRoute(builder: (_) => const DownloadsScreen()),
               ),
             ),
             SliverFillRemaining(
@@ -155,11 +156,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   downloads.items.length + downloads.activeItems.length,
                   onContinue: () => Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+                    CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
                   ),
                   onDownloads: () => Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+                    CinematyPageRoute(builder: (_) => const DownloadsScreen()),
                   ),
                 ),
                 SliverFillRemaining(
@@ -188,11 +189,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 brandOpacityListenable: _brandOpacity,
                 onContinue: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+                  CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
                 ),
                 onDownloads: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+                  CinematyPageRoute(builder: (_) => const DownloadsScreen()),
                 ),
               ),
               if (data.highlights.isNotEmpty)
@@ -290,7 +291,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _open(BuildContext context, MediaItem item) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => DetailsScreen(item: item)),
+      CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
     );
   }
 }

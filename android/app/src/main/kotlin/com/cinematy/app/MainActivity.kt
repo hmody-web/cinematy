@@ -6,6 +6,10 @@ import android.animation.ValueAnimator
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Build
+import android.app.PictureInPictureParams
+import android.content.res.Configuration
+import android.util.Rational
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
@@ -34,6 +38,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "cinematy/native_android_liquid_tab_bar"
+        private const val PIP_CHANNEL = "cinematy/system_pip"
         private const val BAR_HEIGHT_DP = 62
         private const val BAR_SIDE_MARGIN_DP = 14
         private const val BAR_BOTTOM_GAP_DP = 14
@@ -45,6 +50,8 @@ class MainActivity : FlutterActivity() {
     }
 
     private var methodChannel: MethodChannel? = null
+    private var pipChannel: MethodChannel? = null
+    private var tvPipActive = false
     private var liquidTabBar: LiquidGlassTabBar? = null
     private var barContainer: FrameLayout? = null
     private var flutterBackdrop: FlutterView? = null
@@ -75,7 +82,7 @@ class MainActivity : FlutterActivity() {
                             is Int -> raw
                             is Number -> raw.toInt()
                             else -> raw?.toString()?.toIntOrNull()
-                        }?.coerceIn(0, 3) ?: 0
+                        }?.coerceIn(0, 4) ?: 0
                         if (pendingIndex != index) {
                             pendingIndex = index
                             applySelectedIndex(index)
@@ -105,6 +112,71 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+
+        pipChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PIP_CHANNEL).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setActive" -> {
+                        tvPipActive = call.arguments as? Boolean ?: false
+                        updatePictureInPictureParams()
+                        result.success(null)
+                    }
+                    "enter" -> {
+                        val entered = enterTvPictureInPicture()
+                        result.success(entered)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (tvPipActive && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            enterTvPictureInPicture()
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (isInPictureInPictureMode) {
+            barContainer?.visibility = View.GONE
+        } else {
+            applyBarVisibility(pendingVisible, immediate = true)
+        }
+        pipChannel?.invokeMethod("pipChanged", isInPictureInPictureMode)
+    }
+
+    private fun buildTvPictureInPictureParams(): PictureInPictureParams? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+        val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(16, 9))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(tvPipActive)
+            builder.setSeamlessResizeEnabled(true)
+        }
+        return builder.build()
+    }
+
+    private fun updatePictureInPictureParams() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val params = buildTvPictureInPictureParams() ?: return
+        setPictureInPictureParams(params)
+    }
+
+    private fun enterTvPictureInPicture(): Boolean {
+        if (!tvPipActive || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        return try {
+            val params = buildTvPictureInPictureParams() ?: return false
+            setPictureInPictureParams(params)
+            enterPictureInPictureMode(params)
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,6 +192,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         methodChannel?.setMethodCallHandler(null)
         methodChannel = null
+        pipChannel?.setMethodCallHandler(null)
+        pipChannel = null
         scaleAnimator?.cancel()
         scaleAnimator = null
         liquidTabBar = null
@@ -150,6 +224,7 @@ class MainActivity : FlutterActivity() {
             setTabs(
                 listOf(
                     LiquidGlassTabBar.TabItem("مكتبتي", resources.getDrawable(R.drawable.ic_nav_library, theme)),
+                    LiquidGlassTabBar.TabItem("التلفاز", resources.getDrawable(R.drawable.ic_nav_tv, theme)),
                     LiquidGlassTabBar.TabItem("البحث", resources.getDrawable(R.drawable.ic_nav_search, theme)),
                     LiquidGlassTabBar.TabItem("اكتشف", resources.getDrawable(R.drawable.ic_nav_explore, theme)),
                     LiquidGlassTabBar.TabItem("الرئيسية", resources.getDrawable(R.drawable.ic_nav_home, theme)),
@@ -193,7 +268,7 @@ class MainActivity : FlutterActivity() {
 
             onTabSelected = { nativeIndex ->
                 if (!syncingFromFlutter) {
-                    val flutterIndex = 3 - nativeIndex
+                    val flutterIndex = 4 - nativeIndex
                     pendingIndex = flutterIndex
                     performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     methodChannel?.invokeMethod("tabChanged", flutterIndex)
@@ -311,8 +386,8 @@ class MainActivity : FlutterActivity() {
 
     private fun applySelectedIndex(index: Int) {
         val bar = liquidTabBar ?: return
-        val safe = index.coerceIn(0, 3)
-        val nativeIndex = 3 - safe
+        val safe = index.coerceIn(0, 4)
+        val nativeIndex = 4 - safe
         if (bar.selectedIndex == nativeIndex) return
         syncingFromFlutter = true
         try {

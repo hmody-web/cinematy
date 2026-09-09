@@ -36,6 +36,8 @@ class WatchPartyService {
 
   final FirebaseFirestore _firestore;
   final FirebaseDatabase _database;
+  int _serverTimeOffsetMs = 0;
+  bool _serverTimeOffsetLoaded = false;
 
   User get _requiredUser {
     final user = FirebaseAuth.instance.currentUser;
@@ -467,6 +469,19 @@ class WatchPartyService {
     );
   }
 
+  Future<int> serverNowMs() async {
+    if (!_serverTimeOffsetLoaded) {
+      try {
+        final snap = await _database.ref('.info/serverTimeOffset').get();
+        _serverTimeOffsetMs = int.tryParse(snap.value?.toString() ?? '') ?? 0;
+      } catch (_) {
+        _serverTimeOffsetMs = 0;
+      }
+      _serverTimeOffsetLoaded = true;
+    }
+    return DateTime.now().millisecondsSinceEpoch + _serverTimeOffsetMs;
+  }
+
   Stream<bool> watchRealtimeConnection() =>
       _database.ref('.info/connected').onValue.map(
             (event) => event.snapshot.value == true,
@@ -508,6 +523,20 @@ class WatchPartyService {
     return connection;
   }
 
+  Future<void> markPlayerReady({
+    required String sessionId,
+    required String mediaId,
+    required Duration position,
+  }) async {
+    final uid = _requiredUser.uid;
+    await _liveRoot(sessionId).child('presence/$uid').update({
+      'ready': true,
+      'mediaId': mediaId,
+      'positionMs': position.inMilliseconds,
+      'updatedAt': ServerValue.timestamp,
+    });
+  }
+
   Future<void> publishPlayback({
     required String sessionId,
     required String action,
@@ -515,6 +544,7 @@ class WatchPartyService {
     required bool playing,
     required double playbackRate,
     MediaItem? media,
+    int executeAtMs = 0,
   }) async {
     final uid = _requiredUser.uid;
     final payload = <String, dynamic>{
@@ -525,6 +555,7 @@ class WatchPartyService {
       'playing': playing,
       'playbackRate': playbackRate,
       'updatedAt': ServerValue.timestamp,
+      'executeAtMs': executeAtMs,
       if (media != null) 'media': watchPartyMediaToJson(media),
     };
     await _liveRoot(sessionId).child('state').update(payload);
@@ -608,6 +639,8 @@ class WatchPartyPresenceConnection {
         _member = member;
 
   final FirebaseDatabase _database;
+  int _serverTimeOffsetMs = 0;
+  bool _serverTimeOffsetLoaded = false;
   final DatabaseReference _root;
   final WatchPartyMember _member;
   StreamSubscription<DatabaseEvent>? _connectionSub;
@@ -629,11 +662,13 @@ class WatchPartyPresenceConnection {
       await _presence.set({
         'displayName': _member.displayName,
         'state': 'active',
+        'ready': false,
         'updatedAt': ServerValue.timestamp,
       });
       await _presence.onDisconnect().set({
         'displayName': _member.displayName,
         'state': 'left',
+        'ready': false,
         'updatedAt': ServerValue.timestamp,
       });
     } catch (error) {

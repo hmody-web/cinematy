@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/cinematy_user.dart';
 import '../../data/models/friend_request.dart';
@@ -280,7 +281,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 width: double.infinity,
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => DetailsScreen(item: item)),
+                  CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
                 ),
               );
             },

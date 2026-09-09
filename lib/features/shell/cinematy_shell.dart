@@ -7,6 +7,7 @@ import '../discover/discover_screen.dart';
 import '../home/home_screen.dart';
 import '../library/library_screen.dart';
 import '../search/search_screen.dart';
+import '../tv/tv_screen.dart';
 
 class CinematyShell extends StatefulWidget {
   const CinematyShell({super.key});
@@ -23,6 +24,7 @@ class _CinematyShellState extends State<CinematyShell> {
     HomeScreen(),
     DiscoverScreen(),
     SearchScreen(),
+    TvScreen(),
     LibraryScreen(),
   ];
 

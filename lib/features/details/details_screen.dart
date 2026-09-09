@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/content_details.dart';
 import '../../data/models/episode.dart';
@@ -170,7 +171,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                 SliverToBoxAdapter(
                   child: _CastRail(
                     people: details!.cast,
-                    onOpen: (person) => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ActorScreen(person: person))),
+                    onOpen: (person) => Navigator.of(context).push(CinematyPageRoute(builder: (_) => ActorScreen(person: person))),
                   ),
                 ),
               ],
@@ -191,7 +192,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                           separatorBuilder: (_, __) => const SizedBox(width: 12),
                           itemBuilder: (_, i) => MediaPosterCard(
                             item: items[i],
-                            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => DetailsScreen(item: items[i]))),
+                            onTap: () => Navigator.of(context).push(CinematyPageRoute(builder: (_) => DetailsScreen(item: items[i]))),
                           ),
                         ),
                       );
@@ -224,7 +225,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
       );
       if (session == null || !mounted) return;
       Navigator.of(context).push(
-        MaterialPageRoute(
+        CinematyPageRoute(
           builder: (_) => PlayerScreen(
             media: session.media,
             watchPartySessionId: session.id,
@@ -357,7 +358,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
 
   void _play(MediaItem media, {Episode? episode}) {
     final target = episode == null ? media : _episodeMedia(media, episode);
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => PlayerScreen(media: target)));
+    Navigator.of(context).push(CinematyPageRoute(builder: (_) => PlayerScreen(media: target)));
   }
 }
 
@@ -401,7 +402,7 @@ class _ImmersiveHero extends StatelessWidget {
               begin: Alignment.centerRight,
               end: Alignment.centerLeft,
               stops: [0, .36, .72],
-              colors: [AppColors.background, Color(0xD0070505), Color(0x12070505)],
+              colors: [Color(0xB3070505), Color(0x8F070505), Color(0x12070505)],
             ),
           ),
         ),

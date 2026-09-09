@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../data/models/cinematy_user.dart';
 import '../../data/services/cinematy_account_api.dart';
 import 'user_profile_screen.dart';
@@ -82,7 +83,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final handle = user.handle;
     if (handle == null || handle.isEmpty) return;
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => UserProfileScreen(handle: handle)),
+      CinematyPageRoute(builder: (_) => UserProfileScreen(handle: handle)),
     );
   }
 }

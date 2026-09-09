@@ -317,6 +317,7 @@ class WatchPartyPlaybackState {
     required this.updatedAtMs,
     this.media,
     this.eventId = '',
+    this.executeAtMs = 0,
   });
 
   final String action;
@@ -327,6 +328,7 @@ class WatchPartyPlaybackState {
   final int updatedAtMs;
   final MediaItem? media;
   final String eventId;
+  final int executeAtMs;
 
   factory WatchPartyPlaybackState.fromJson(Map<String, dynamic> json) {
     final rawMedia = json['media'];
@@ -342,6 +344,7 @@ class WatchPartyPlaybackState {
           ? watchPartyMediaFromJson(Map<String, dynamic>.from(rawMedia))
           : null,
       eventId: json['eventId']?.toString() ?? '',
+      executeAtMs: int.tryParse(json['executeAtMs']?.toString() ?? '') ?? 0,
     );
   }
 }
@@ -352,12 +355,14 @@ class WatchPartyPresence {
     required this.displayName,
     required this.state,
     required this.updatedAtMs,
+    this.ready = false,
   });
 
   final String uid;
   final String displayName;
   final String state;
   final int updatedAtMs;
+  final bool ready;
 
   bool get active => state == 'active';
 
@@ -367,5 +372,6 @@ class WatchPartyPresence {
         displayName: json['displayName']?.toString() ?? 'صديقك',
         state: json['state']?.toString() ?? 'active',
         updatedAtMs: int.tryParse(json['updatedAt']?.toString() ?? '') ?? 0,
+        ready: json['ready'] == true,
       );
 }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/network/image_cache.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/download_item.dart';
@@ -42,11 +43,11 @@ class LibraryScreen extends ConsumerWidget {
         downloadsCount: downloads.items.length + downloads.activeItems.length,
         onContinue: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const ContinueWatchingScreen()),
+          CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
         ),
         onDownloads: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+          CinematyPageRoute(builder: (_) => const DownloadsScreen()),
         ),
       ),
       body: ListView(
@@ -73,19 +74,19 @@ class LibraryScreen extends ConsumerWidget {
               groupsCount: snapshot.data ?? 0,
               onDownloads: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const DownloadsScreen()),
+                CinematyPageRoute(builder: (_) => const DownloadsScreen()),
               ),
               onLater: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const WatchLaterScreen()),
+                CinematyPageRoute(builder: (_) => const WatchLaterScreen()),
               ),
               onFavorites: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const FavoritesScreen()),
+                CinematyPageRoute(builder: (_) => const FavoritesScreen()),
               ),
               onGroups: () => Navigator.push(
                 context,
-                MaterialPageRoute(
+                CinematyPageRoute(
                   builder: (_) => const WatchPartyGroupsScreen(),
                 ),
               ),
@@ -97,7 +98,7 @@ class LibraryScreen extends ConsumerWidget {
             child: _AboutCinematyCard(
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const AboutCinematyScreen()),
+                CinematyPageRoute(builder: (_) => const AboutCinematyScreen()),
               ),
             ),
           ),
@@ -118,7 +119,7 @@ class LibraryScreen extends ConsumerWidget {
                     subtitle: 'اللغة، خط التطبيق وخيارات الواجهة',
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const AppSettingsScreen()),
+                      CinematyPageRoute(builder: (_) => const AppSettingsScreen()),
                     ),
                   ),
                   Divider(height: 1, indent: 62, color: Colors.white.withOpacity(.06)),
@@ -128,7 +129,7 @@ class LibraryScreen extends ConsumerWidget {
                     subtitle: 'الخط، الألوان، الحواف والخلفية',
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const SubtitleSettingsScreen()),
+                      CinematyPageRoute(builder: (_) => const SubtitleSettingsScreen()),
                     ),
                   ),
                   Divider(height: 1, indent: 62, color: Colors.white.withOpacity(.06)),
@@ -387,7 +388,7 @@ class _LibraryAccountCard extends StatelessWidget {
           child: InkWell(
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const AccountScreen()),
+              CinematyPageRoute(builder: (_) => const AccountScreen()),
             ),
             borderRadius: BorderRadius.circular(28),
             child: Ink(
@@ -679,7 +680,7 @@ class _Rail extends StatelessWidget {
               progress: showProgress ? library.cardProgress(item.id)?.ratio : null,
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => DetailsScreen(item: item)),
+                CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
               ),
             );
           },
@@ -739,7 +740,7 @@ class DownloadsScreen extends ConsumerWidget {
                           download: d,
                           onPlay: () => Navigator.push(
                             context,
-                            MaterialPageRoute(
+                            CinematyPageRoute(
                               builder: (_) => PlayerScreen(
                                 media: d.media,
                                 localPath: d.localPath,
@@ -939,7 +940,7 @@ class FavoritesScreen extends ConsumerWidget {
                 width: double.infinity,
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => DetailsScreen(item: items[i])),
+                  CinematyPageRoute(builder: (_) => DetailsScreen(item: items[i])),
                 ),
               ),
             ),
@@ -975,7 +976,7 @@ class WatchLaterScreen extends ConsumerWidget {
                 width: double.infinity,
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => DetailsScreen(item: items[i])),
+                  CinematyPageRoute(builder: (_) => DetailsScreen(item: items[i])),
                 ),
               ),
             ),
@@ -1019,7 +1020,7 @@ class ContinueWatchingScreen extends ConsumerWidget {
                   progress: store.cardProgress(item.id)?.ratio,
                   onTap: () => Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => DetailsScreen(item: item)),
+                    CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
                   ),
                 );
               },

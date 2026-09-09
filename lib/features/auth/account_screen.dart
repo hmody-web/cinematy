@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/cinematy_user.dart';
 import '../../data/services/cinematy_account_api.dart';
@@ -95,7 +96,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
   Future<void> _openFriendRequests() async {
     await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => const FriendRequestsScreen()),
+      CinematyPageRoute(builder: (_) => const FriendRequestsScreen()),
     );
     if (!mounted) return;
     await _refreshFriendRequestCount();
@@ -164,7 +165,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
 
   void _openFriends() {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const FriendsScreen()),
+      CinematyPageRoute(builder: (_) => const FriendsScreen()),
     );
   }
 
@@ -458,7 +459,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen>
                   width: double.infinity,
                   onTap: () => Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => DetailsScreen(item: item)),
+                    CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
                   ),
                 );
               },

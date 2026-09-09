@@ -106,8 +106,8 @@ private final class CinematyTvPlayerView: NSObject, FlutterPlatformView, AVPictu
     player.actionAtItemEnd = .none
     player.automaticallyWaitsToMinimizeStalling = true
 
-    if AVPictureInPictureController.isPictureInPictureSupported() {
-      let controller = AVPictureInPictureController(playerLayer: container.playerLayer)
+    if AVPictureInPictureController.isPictureInPictureSupported(),
+       let controller = AVPictureInPictureController(playerLayer: container.playerLayer) {
       controller.delegate = self
       if #available(iOS 14.2, *) {
         controller.canStartPictureInPictureAutomaticallyFromInline = true

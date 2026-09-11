@@ -58,7 +58,7 @@ class MainActivity : FlutterActivity() {
 
     private var pendingIndex = 0
     private var pendingCompact = false
-    private var pendingVisible = true
+    private var pendingVisible = false
     private var syncingFromFlutter = false
     private var touchingBar = false
     private var appliedVisible: Boolean? = null

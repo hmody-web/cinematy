@@ -168,12 +168,11 @@ final class SceneDelegate: FlutterSceneDelegate, UITabBarDelegate {
       ),
     ])
 
-    // Visible immediately. Flutter may later hide it only when a pushed route
-    // is above the main shell. This removes channel-startup timing as a cause
-    // of an invisible main tab bar.
-    tabBar.isHidden = false
-    tabBar.isUserInteractionEnabled = true
-    tabBar.alpha = 1.0
+    // Start hidden. Flutter explicitly shows the native tab bar only after
+    // the splash has finished and the main shell is active.
+    tabBar.isHidden = true
+    tabBar.isUserInteractionEnabled = false
+    tabBar.alpha = 0.0
     controller.view.bringSubviewToFront(tabBar)
 
     let channel = FlutterMethodChannel(

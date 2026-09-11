@@ -318,6 +318,7 @@ class WatchPartyPlaybackState {
     this.media,
     this.eventId = '',
     this.executeAtMs = 0,
+    this.systemReason = '',
   });
 
   final String action;
@@ -329,6 +330,7 @@ class WatchPartyPlaybackState {
   final MediaItem? media;
   final String eventId;
   final int executeAtMs;
+  final String systemReason;
 
   factory WatchPartyPlaybackState.fromJson(Map<String, dynamic> json) {
     final rawMedia = json['media'];
@@ -345,6 +347,7 @@ class WatchPartyPlaybackState {
           : null,
       eventId: json['eventId']?.toString() ?? '',
       executeAtMs: int.tryParse(json['executeAtMs']?.toString() ?? '') ?? 0,
+      systemReason: json['systemReason']?.toString() ?? '',
     );
   }
 }
@@ -356,6 +359,10 @@ class WatchPartyPresence {
     required this.state,
     required this.updatedAtMs,
     this.ready = false,
+    this.buffering = false,
+    this.playing = false,
+    this.positionMs = 0,
+    this.mediaId = '',
   });
 
   final String uid;
@@ -363,8 +370,13 @@ class WatchPartyPresence {
   final String state;
   final int updatedAtMs;
   final bool ready;
+  final bool buffering;
+  final bool playing;
+  final int positionMs;
+  final String mediaId;
 
   bool get active => state == 'active';
+  bool get playbackReady => active && ready && !buffering;
 
   factory WatchPartyPresence.fromJson(String uid, Map<String, dynamic> json) =>
       WatchPartyPresence(
@@ -373,5 +385,9 @@ class WatchPartyPresence {
         state: json['state']?.toString() ?? 'active',
         updatedAtMs: int.tryParse(json['updatedAt']?.toString() ?? '') ?? 0,
         ready: json['ready'] == true,
+        buffering: json['buffering'] == true,
+        playing: json['playing'] == true,
+        positionMs: int.tryParse(json['positionMs']?.toString() ?? '') ?? 0,
+        mediaId: json['mediaId']?.toString() ?? '',
       );
 }

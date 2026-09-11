@@ -64,7 +64,7 @@ class MediaItem {
       posterUrl: normalizeMediaUrl(poster),
       backdropUrl: normalizeMediaUrl(backdrop),
       year: JsonUtils.integer(json, ['year']),
-      rating: JsonUtils.decimal(json, ['imdbRating', 'filmRating', 'seriesRating', 'rating', 'rate']),
+      rating: JsonUtils.decimal(json, ['stars']),
       views: JsonUtils.integer(json, ['views', 'totalViews', 'viewsNumber']),
       isSeries: kind == '2' || kind.contains('tv') || kind.contains('series') || season > 0 || JsonUtils.boolean(json, ['isSeries']),
       season: season < 0 ? null : season,
@@ -88,14 +88,14 @@ class MediaItem {
     if (episode != null) 'episodeNummer': episode,
   };
 
-  MediaItem copyWith({String? backdropUrl}) => MediaItem(
+  MediaItem copyWith({String? backdropUrl, double? rating}) => MediaItem(
     id: id,
     title: title,
     description: description,
     posterUrl: posterUrl,
     backdropUrl: backdropUrl ?? this.backdropUrl,
     year: year,
-    rating: rating,
+    rating: rating ?? this.rating,
     views: views,
     isSeries: isSeries,
     season: season,

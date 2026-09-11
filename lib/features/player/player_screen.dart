@@ -74,6 +74,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   Timer? _partyMessageTimer;
   Timer? _partyPresenceNoticeTimer;
   Timer? _partyDriftRestoreTimer;
+  Timer? _partyResumeDebounceTimer;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -95,10 +96,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   WatchPartyPlaybackState? _pendingPartyState;
   final Map<String, String> _partyPresenceStates = <String, String>{};
   final Map<String, bool> _partyPlayerReadyStates = <String, bool>{};
+  final Map<String, bool> _partyBufferingStates = <String, bool>{};
+  final Map<String, int> _partyMemberPositions = <String, int>{};
   bool _partyReady = false;
   bool _partyInitialSyncDone = false;
   bool _partyApplyingRemote = false;
   bool _partyDesiredPlaying = false;
+  bool _partyPausedForBuffering = false;
+  bool _publishingBufferPause = false;
+  bool _partyAdaptiveQualitySwitching = false;
+  final List<DateTime> _partyBufferIncidents = <DateTime>[];
+  DateTime? _lastPartyAdaptiveQualityChange;
   bool _leavingParty = false;
   bool _partyHandoff = false;
   bool? _partyRealtimeConnected;
@@ -158,7 +166,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final session = _watchPartySession;
     if (session == null || session.memberUids.isEmpty) return false;
     return session.memberUids.every(
-      (uid) => _partyPresenceStates[uid] == 'active' && _partyPlayerReadyStates[uid] == true,
+      (uid) =>
+          _partyPresenceStates[uid] == 'active' &&
+          _partyPlayerReadyStates[uid] == true,
+    );
+  }
+
+  bool get _allPartyMembersPlaybackReady {
+    final session = _watchPartySession;
+    if (session == null || session.memberUids.isEmpty) return false;
+    return session.memberUids.every(
+      (uid) =>
+          _partyPresenceStates[uid] == 'active' &&
+          _partyPlayerReadyStates[uid] == true &&
+          _partyBufferingStates[uid] != true,
     );
   }
 
@@ -194,6 +215,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     _bufferingSub = _player.stream.buffering.listen((value) {
       if (mounted) setState(() => _buffering = value);
+      if (_inWatchParty) {
+        unawaited(_handleLocalPartyBuffering(value));
+      }
     });
 
     _progressTimer = Timer.periodic(
@@ -279,7 +303,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
       _partyHeartbeatTimer?.cancel();
       _partyHeartbeatTimer = Timer.periodic(
-        const Duration(milliseconds: 500),
+        const Duration(milliseconds: 750),
         (_) => unawaited(_publishPartyHeartbeat()),
       );
 
@@ -363,16 +387,208 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   Future<void> _publishPartyHeartbeat() async {
     final session = _watchPartySession;
-    if (!_partyReady || session == null || !_isPartyHost || _loading) return;
+    if (!_partyReady || session == null || _loading) return;
     try {
-      await _watchPartyService.publishHeartbeat(
+      await _watchPartyService.updateMemberPlayback(
         sessionId: session.id,
+        mediaId: widget.media.id,
         position: _player.state.position,
-        playing: _partyDesiredPlaying,
-        playbackRate: _playbackRate,
+        buffering: _buffering,
+        playing: _player.state.playing,
+        ready: !_loading && !_initializingPlayback,
       );
+      // يبقى خط الزمن المرجعي للروم من المضيف فقط، أما حالة كل عضو
+      // (buffering/position/ready) فتُنشر من جميع الأجهزة.
+      if (_isPartyHost && !_partyPausedForBuffering) {
+        await _watchPartyService.publishHeartbeat(
+          sessionId: session.id,
+          position: _player.state.position,
+          playing: _partyDesiredPlaying,
+          playbackRate: _playbackRate,
+        );
+      }
     } catch (_) {
       // Heartbeats are best-effort; interaction events still keep the room synced.
+    }
+  }
+
+  Future<void> _handleLocalPartyBuffering(bool buffering) async {
+    if (!_partyReady || _loading || _initializingPlayback) return;
+    final session = _watchPartySession;
+    if (session == null || session.ended) return;
+
+    try {
+      await _watchPartyService.updateMemberPlayback(
+        sessionId: session.id,
+        mediaId: widget.media.id,
+        position: _player.state.position,
+        buffering: buffering,
+        playing: _player.state.playing,
+      );
+    } catch (_) {}
+
+    if (buffering && _partyDesiredPlaying && !_publishingBufferPause) {
+      _publishingBufferPause = true;
+      _partyPausedForBuffering = true;
+      try {
+        // يتوقف الجهاز المتأثر فوراً قبل انتظار الشبكة، ثم يوقف الروم كله.
+        if (_player.state.playing) await _player.pause();
+        await _watchPartyService.publishSystemPause(
+          sessionId: session.id,
+          position: _player.state.position,
+          playbackRate: _playbackRate,
+          reason: 'buffering',
+        );
+      } catch (_) {
+      } finally {
+        _publishingBufferPause = false;
+      }
+      if (mounted) {
+        _showPartyOverlay(
+          'تم إيقاف المشاهدة مؤقتاً حتى يصبح جميع الأعضاء جاهزين…',
+          persistent: true,
+        );
+      }
+      if (!_isPartyHost) {
+        unawaited(_tryAdaptivePartyQualityDowngrade());
+      }
+      return;
+    }
+
+    if (!buffering) {
+      _schedulePartyResumeIfReady();
+    }
+  }
+
+  int _partySourceScore(VideoSource source) {
+    final q = '${source.quality} ${source.resolution}'.toLowerCase();
+    for (final value in <int>[2160, 1440, 1080, 720, 480, 360, 320, 240]) {
+      if (q.contains('$value')) return value;
+    }
+    return 1;
+  }
+
+  Future<void> _tryAdaptivePartyQualityDowngrade() async {
+    if (_partyAdaptiveQualitySwitching ||
+        _isPartyHost ||
+        _sources.length < 2 ||
+        _selectedSource == null) {
+      return;
+    }
+    final now = DateTime.now();
+    _partyBufferIncidents.add(now);
+    _partyBufferIncidents.removeWhere(
+      (item) => now.difference(item) > const Duration(seconds: 25),
+    );
+    if (_partyBufferIncidents.length < 2) return;
+    if (_lastPartyAdaptiveQualityChange != null &&
+        now.difference(_lastPartyAdaptiveQualityChange!) <
+            const Duration(seconds: 90)) {
+      return;
+    }
+
+    final currentScore = _partySourceScore(_selectedSource!);
+    final lower = _sources
+        .where((source) =>
+            source.url != _selectedSource!.url &&
+            _partySourceScore(source) < currentScore)
+        .toList()
+      ..sort(
+        (a, b) => _partySourceScore(b).compareTo(_partySourceScore(a)),
+      );
+    if (lower.isEmpty) return;
+
+    _partyAdaptiveQualitySwitching = true;
+    try {
+      final next = lower.first;
+      final target = _player.state.position;
+      await _openSource(
+        next,
+        preservePosition: true,
+        forcePlay: false,
+        explicitPosition: target,
+      );
+      _lastPartyAdaptiveQualityChange = now;
+      _partyBufferIncidents.clear();
+      final session = _watchPartySession;
+      if (session != null) {
+        await _watchPartyService.updateMemberPlayback(
+          sessionId: session.id,
+          mediaId: widget.media.id,
+          position: _player.state.position,
+          buffering: _buffering,
+          playing: false,
+        );
+      }
+      if (mounted) {
+        AppNotice.show(
+          context,
+          title: 'تحسين سلاسة المشاهدة',
+          message: 'تم تخفيض الجودة تلقائياً إلى ${next.quality} بسبب ضعف الاتصال.',
+          type: AppNoticeType.info,
+        );
+      }
+    } catch (error) {
+      debugPrint('[WatchParty] adaptive quality downgrade failed: $error');
+    } finally {
+      _partyAdaptiveQualitySwitching = false;
+    }
+  }
+
+  void _schedulePartyResumeIfReady() {
+    if (!_isPartyHost || !_partyPausedForBuffering || !_partyDesiredPlaying) {
+      return;
+    }
+    if (!_allPartyMembersPlaybackReady) return;
+    _partyResumeDebounceTimer?.cancel();
+    _partyResumeDebounceTimer = Timer(const Duration(milliseconds: 650), () {
+      unawaited(_resumePartyAfterBuffering());
+    });
+  }
+
+  Future<void> _resumePartyAfterBuffering() async {
+    final session = _watchPartySession;
+    if (!mounted ||
+        session == null ||
+        !_isPartyHost ||
+        !_partyPausedForBuffering ||
+        !_partyDesiredPlaying ||
+        !_allPartyMembersPlaybackReady) {
+      return;
+    }
+    try {
+      // نأخذ أبطأ موضع بين الأعضاء حتى لا نقفز أمام الشخص الذي كان يحمل.
+      final positions = session.memberUids
+          .map((uid) => _partyMemberPositions[uid])
+          .whereType<int>()
+          .where((value) => value >= 0)
+          .toList();
+      var targetMs = _player.state.position.inMilliseconds;
+      if (positions.isNotEmpty) {
+        targetMs = positions.reduce((a, b) => a < b ? a : b);
+      }
+      if (_duration.inMilliseconds > 0) {
+        targetMs = targetMs.clamp(0, _duration.inMilliseconds).toInt();
+      }
+      final target = Duration(milliseconds: targetMs);
+      if ((_player.state.position - target).inMilliseconds.abs() > 120) {
+        await _player.seek(target);
+      }
+      final now = await _watchPartyService.serverNowMs();
+      final executeAt = now + 850;
+      await _watchPartyService.publishPlayback(
+        sessionId: session.id,
+        action: 'play',
+        position: target,
+        playing: true,
+        playbackRate: _playbackRate,
+        executeAtMs: executeAt,
+      );
+      _partyPausedForBuffering = false;
+      _clearPartyOverlay();
+      await _executePartyPlayAt(executeAt, target);
+    } catch (error) {
+      debugPrint('[WatchParty] buffered resume failed: $error');
     }
   }
 
@@ -390,36 +606,42 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   Future<void> _softCorrectPartyDrift(int targetMs) async {
-    if (_switchingSource || _scrubbing) return;
+    if (_switchingSource || _scrubbing || _buffering || _partyPausedForBuffering) {
+      return;
+    }
     final localMs = _player.state.position.inMilliseconds;
     final signedDrift = targetMs - localMs;
     final absDrift = signedDrift.abs();
-    if (absDrift < 90) return;
 
-    // الانحراف الصغير يتصحح بنعومة عبر تعديل سرعة مؤقت ضئيل جداً، بدون seek
-    // وبدون أي تقطيع ملحوظ. الانحراف الكبير فقط يحتاج قفزة مباشرة.
-    if (absDrift <= 700 && _player.state.playing) {
-      final correctionRate = (_playbackRate * (signedDrift > 0 ? 1.018 : .982))
-          .clamp(.5, 2.0)
-          .toDouble();
+    // أقل من ربع ثانية لا يستحق أي تدخل؛ كثرة التصحيح بحد ذاتها تسبب jitter.
+    if (absDrift < 250) return;
+
+    // للفروقات المتوسطة نصحح ببطء شديد على عدة ثوانٍ. الفرق في السرعة
+    // أقل من 1% لذلك لا يسبب تقطيعاً أو تغيراً مسموعاً تقريباً.
+    if (absDrift <= 1800 && _player.state.playing) {
+      final factor = signedDrift > 0 ? 1.0075 : .9925;
+      final correctionRate = (_playbackRate * factor).clamp(.5, 2.0).toDouble();
       await _player.setRate(correctionRate);
       _partyDriftRestoreTimer?.cancel();
-      _partyDriftRestoreTimer = Timer(const Duration(milliseconds: 650), () {
+      _partyDriftRestoreTimer = Timer(const Duration(seconds: 4), () {
         if (mounted && !_switchingSource) {
           unawaited(_player.setRate(_playbackRate));
         }
       });
       return;
     }
-    if (absDrift > 700) {
-      await _player.seek(Duration(milliseconds: targetMs));
-      if (mounted && !_scrubbing) setState(() => _position = Duration(milliseconds: targetMs));
-    }
+
+    // لا نعمل seek قاسياً أثناء التشغيل لمجرد heartbeat. الانحراف الكبير
+    // يُعالج عند توقف/إعادة جاهزية الروم حتى يبقى الفيديو سلساً.
   }
 
   Future<void> _handleRemotePartyState(WatchPartyPlaybackState state) async {
     _pendingPartyState = state;
-    _partyDesiredPlaying = state.playing;
+    if (state.action != 'system_pause') {
+      _partyDesiredPlaying = state.playing;
+    } else {
+      _partyPausedForBuffering = true;
+    }
     if (!_partyReady || _loading || _initializingPlayback || !mounted) return;
     if (state.sourceUid == _watchPartyService.currentUid) return;
 
@@ -443,14 +665,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       return;
     }
 
-    // المزامنة هنا خاصة بالشريط وأوامر المشغل فقط. لا توجد أي علاقة
-    // بالـ buffering أو جودة الفيديو أو سرعة تحميل أي عضو آخر.
+    // أوامر المشغل وخط الزمن تبقى خفيفة، بينما حالة buffering لكل عضو
+    // تُدار عبر presence حتى لا نسبب seek أو jitter مستمر داخل الفيديو.
     _partyApplyingRemote = true;
     try {
       final isSpeedEvent = state.action == 'speed';
       final isSeekEvent = state.action == 'seek';
-      final isPlayPauseEvent =
-          state.action == 'play' || state.action == 'pause';
+      final isPlayPauseEvent = state.action == 'play' ||
+          state.action == 'pause' ||
+          state.action == 'system_pause';
       final isInitialSync = state.action == 'sync' || forceSync;
 
       if ((isSpeedEvent || isInitialSync || isPlayPauseEvent) &&
@@ -493,6 +716,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
       if (state.action == 'play' ||
           state.action == 'pause' ||
+          state.action == 'system_pause' ||
           state.action == 'seek' ||
           isInitialSync) {
         if (state.playing) {
@@ -506,6 +730,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         } else {
           if (_player.state.playing) await _player.pause();
         }
+      }
+      if (state.action == 'system_pause') {
+        _partyPausedForBuffering = true;
+        if (mounted) {
+          _showPartyOverlay(
+            'تم إيقاف المشاهدة مؤقتاً حتى يصبح جميع الأعضاء جاهزين…',
+            persistent: true,
+          );
+        }
+      } else if (state.action == 'play') {
+        _partyPausedForBuffering = false;
+        _clearPartyOverlay();
       }
       _pendingPartyState = state;
     } catch (error) {
@@ -543,6 +779,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       final previous = _partyPresenceStates[item.uid];
       _partyPresenceStates[item.uid] = item.state;
       _partyPlayerReadyStates[item.uid] = item.ready;
+      _partyBufferingStates[item.uid] = item.buffering;
+      _partyMemberPositions[item.uid] = item.positionMs;
       if (item.uid == currentUid || previous == null) continue;
 
       if (previous == 'active' && item.state == 'left') {
@@ -558,18 +796,62 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       }
     }
 
-    // الانتظار مطلوب فقط عند بداية الجلسة. بعد أن تبدأ، مغادرة أو ضعف اتصال
-    // أي عضو لا يوقف فيديو بقية الأعضاء إطلاقاً.
     if (!_partyInitialSyncDone && !_loading && !_initializingPlayback) {
       if (_allPartyMembersActive) {
         await _onPartyPlayerReady();
       }
+      return;
+    }
+
+    // بعد بدء الجلسة: أي buffering عند أي عضو يوقف الجميع، ولا يعاد
+    // التشغيل إلا بعد أن تصبح حالة كل عضو active + ready + !buffering.
+    final session = _watchPartySession;
+    if (session == null) return;
+    final presenceByUid = <String, WatchPartyPresence>{
+      for (final item in presence) item.uid: item,
+    };
+    final anyBuffering = session.memberUids.any(
+      (uid) => presenceByUid[uid]?.buffering == true,
+    );
+    final anyUnavailable = session.memberUids.any(
+      (uid) => presenceByUid[uid]?.active != true,
+    );
+    if ((anyBuffering || anyUnavailable) &&
+        _partyDesiredPlaying &&
+        !_partyPausedForBuffering) {
+      _partyPausedForBuffering = true;
+      if (_player.state.playing) await _player.pause();
+      // النظام يسمح لهذا الحدث من أي عضو، لذلك حتى لو المضيف هو صاحب
+      // الاتصال الضعيف يستطيع الطرف الآخر إيقاف خط الزمن فوراً.
+      unawaited(_watchPartyService.publishSystemPause(
+        sessionId: session.id,
+        position: _player.state.position,
+        playbackRate: _playbackRate,
+        reason: anyBuffering ? 'member_buffering' : 'member_unavailable',
+      ));
+      _showPartyOverlay(
+        anyBuffering
+            ? 'تم إيقاف المشاهدة مؤقتاً حتى يصبح جميع الأعضاء جاهزين…'
+            : 'توقفت المشاهدة مؤقتاً بسبب انقطاع اتصال أحد أعضاء الروم…',
+        persistent: true,
+      );
+    } else if (!anyBuffering && !anyUnavailable) {
+      _schedulePartyResumeIfReady();
     }
   }
 
   Future<void> _handlePartyRealtimeConnection(bool connected) async {
     final previous = _partyRealtimeConnected;
     _partyRealtimeConnected = connected;
+    if (!connected && _partyReady && _partyDesiredPlaying) {
+      _partyPausedForBuffering = true;
+      if (_player.state.playing) await _player.pause();
+      _showPartyOverlay(
+        'توقفت المشاهدة مؤقتاً بسبب ضعف الاتصال بالروم…',
+        persistent: true,
+      );
+      return;
+    }
     if (previous == false && connected) {
       await _resyncAfterPartyReconnect();
     }
@@ -583,17 +865,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     try {
       // المضيف يبقى على فيديوه الحالي ويحدّث خط الزمن في Firebase فقط.
       if (_isPartyHost) {
-        await _watchPartyService.publishHeartbeat(
-          sessionId: session.id,
-          position: _player.state.position,
-          playing: _player.state.playing,
-          playbackRate: _playbackRate,
-        );
-        await _watchPartyService.markPlayerReady(
+        await _watchPartyService.updateMemberPlayback(
           sessionId: session.id,
           mediaId: widget.media.id,
           position: _player.state.position,
+          buffering: _buffering,
+          playing: _player.state.playing,
         );
+        if (!_partyPausedForBuffering) {
+          await _watchPartyService.publishHeartbeat(
+            sessionId: session.id,
+            position: _player.state.position,
+            playing: _partyDesiredPlaying,
+            playbackRate: _playbackRate,
+          );
+        }
         return;
       }
 
@@ -601,13 +887,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       // مستقل. لا توجد أي متابعة دورية تعمل seek بعد ذلك.
       final state = await _watchPartyService.loadPlayback(session.id);
       if (state != null) {
-        _partyDesiredPlaying = state.playing;
+        if (state.action != 'system_pause') {
+          _partyDesiredPlaying = state.playing;
+        }
         await _applyRemotePartyState(state, forceSync: true);
       }
-      await _watchPartyService.markPlayerReady(
+      await _watchPartyService.updateMemberPlayback(
         sessionId: session.id,
         mediaId: widget.media.id,
         position: _player.state.position,
+        buffering: _buffering,
+        playing: _player.state.playing,
       );
     } catch (error) {
       debugPrint('[WatchParty] reconnect sync failed: $error');
@@ -1560,6 +1850,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     if (_inWatchParty && _partyReady && _watchPartySession != null) {
       _partyDesiredPlaying = shouldPlay;
       if (shouldPlay) {
+        if (!_allPartyMembersPlaybackReady && _partyInitialSyncDone) {
+          _partyPausedForBuffering = true;
+          _showPartyOverlay(
+            'بانتظار جاهزية جميع أعضاء الروم قبل التشغيل…',
+            persistent: true,
+          );
+          _schedulePartyResumeIfReady();
+          return;
+        }
         try {
           final now = await _watchPartyService.serverNowMs();
           final executeAt = now + 220;
@@ -1576,6 +1875,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           await _player.play();
         }
       } else {
+        // إيقاف المستخدم يلغي أي استئناف تلقائي متعلق بالـ buffering.
+        _partyPausedForBuffering = false;
+        _partyResumeDebounceTimer?.cancel();
+        _clearPartyOverlay();
         // الإيقاف محلياً فوراً، وإرسال الحدث بالخلفية بدون انتظار الشبكة.
         await _player.pause();
         unawaited(_watchPartyService.publishPlayback(
@@ -2008,6 +2311,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _partyMessageTimer?.cancel();
     _partyPresenceNoticeTimer?.cancel();
     _partyDriftRestoreTimer?.cancel();
+    _partyResumeDebounceTimer?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
     _bufferingSub?.cancel();

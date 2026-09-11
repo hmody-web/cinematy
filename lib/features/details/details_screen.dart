@@ -13,6 +13,7 @@ import '../../data/models/media_item.dart';
 import '../../data/models/video_source.dart';
 import '../../providers.dart';
 import '../../widgets/app_notice.dart';
+import '../../widgets/imdb_badge.dart';
 import '../../widgets/media_card.dart';
 import '../../widgets/network_image.dart';
 import '../../widgets/section_header.dart';
@@ -427,6 +428,7 @@ class _ImmersiveHero extends StatelessWidget {
               spacing: 7,
               runSpacing: 7,
               children: [
+                ImdbBadge(item: media),
                 if (media.year > 0) _MetaPill(text: '${media.year}'),
                 ...genres.map((e) => _MetaPill(text: e)),
               ],

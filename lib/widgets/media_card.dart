@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/app_theme.dart';
 import '../data/models/media_item.dart';
+import 'imdb_badge.dart';
 import 'network_image.dart';
 
 class MediaPosterCard extends StatelessWidget {
@@ -38,12 +39,11 @@ class MediaPosterCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (item.rating > 0)
-                    Positioned(
-                      left: 8,
-                      top: 8,
-                      child: _Badge(icon: Icons.star_rounded, text: item.rating.toStringAsFixed(1)),
-                    ),
+                  Positioned(
+                    left: 8,
+                    top: 8,
+                    child: ImdbBadge(item: item, compact: true),
+                  ),
                   if (item.isSeries)
                     const Positioned(right: 8, top: 8, child: _Badge(icon: Icons.tv_rounded, text: 'مسلسل')),
                   if (progress != null && progress! > 0)

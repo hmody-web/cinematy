@@ -1021,6 +1021,152 @@ class CinemanaApi {
     return false;
   }
 
+  final Map<String, double> _imdbRatingMemoryCache = <String, double>{};
+
+  /// Returns the IMDb value used by the native Cinemana UI for this exact
+  /// video. Cinemana's allVideoInfo payload exposes the IMDb score in the
+  /// `stars` field. We inspect only the exact video object (or the primary
+  /// videoInfo object) so nested items can never leak a score into this title.
+
+  Future<List<int>> availableSearchYears({bool refresh = false}) async {
+    try {
+      final raw = await _get(
+        CinemanaRoutes.availableYears,
+        refresh: refresh,
+        ttl: const Duration(hours: 12),
+        requireNonEmpty: false,
+      );
+      final years = <int>{};
+      void walk(dynamic node) {
+        if (node == null) return;
+        if (node is num) {
+          final y = node.toInt();
+          if (y >= 1900 && y <= DateTime.now().year + 1) years.add(y);
+          return;
+        }
+        if (node is String) {
+          for (final m in RegExp(r'\b(19|20)\d{2}\b').allMatches(node)) {
+            years.add(int.parse(m.group(0)!));
+          }
+          return;
+        }
+        if (node is List) {
+          for (final e in node) walk(e);
+          return;
+        }
+        if (node is Map) {
+          for (final v in node.values) walk(v);
+        }
+      }
+      walk(raw);
+      final result = years.toList()..sort((a, b) => b.compareTo(a));
+      return result;
+    } catch (_) {
+      final now = DateTime.now().year;
+      return [for (var y = now; y >= 1970; y--) y];
+    }
+  }
+
+  Future<List<MediaSection>> collections({bool refresh = false}) async {
+    final raw = await _get(
+      CinemanaRoutes.collections,
+      refresh: refresh,
+      ttl: const Duration(minutes: 30),
+      requireNonEmpty: false,
+    );
+    final result = <MediaSection>[];
+    final seen = <String>{};
+    for (final map in _flattenMaps(raw)) {
+      final id = JsonUtils.string(map, const [
+        'collectionID', 'collectionId', 'collection_id', 'id', 'nb'
+      ]).trim();
+      final title = JsonUtils.string(map, const [
+        'arTitle', 'ar_title', 'lang_ar_title', 'title', 'name', 'enTitle'
+      ]).trim();
+      if (id.isEmpty || title.isEmpty || !seen.add(id)) continue;
+      final items = _mediaList(map['videos'] ?? map['items'] ?? map['videoInfo']);
+      result.add(MediaSection(id: id, title: title, items: _unique(items)));
+    }
+    return result;
+  }
+
+  Future<List<MediaItem>> collectionVideos(String collectionId) async {
+    final id = collectionId.trim();
+    if (id.isEmpty) return const <MediaItem>[];
+    final collected = <MediaItem>[];
+    for (final path in <String>[
+      CinemanaRoutes.collectionVideos(id),
+      CinemanaRoutes.collection(id),
+    ]) {
+      try {
+        final raw = await _get(
+          path,
+          ttl: const Duration(minutes: 15),
+          requireNonEmpty: false,
+        );
+        collected.addAll(_mediaList(raw));
+        if (collected.isNotEmpty) break;
+      } catch (_) {}
+    }
+    return _unique(collected);
+  }
+
+  Future<double> imdbRating(String id, {bool refresh = false}) async {
+    final cleanId = id.trim();
+    if (cleanId.isEmpty) return 0;
+    if (!refresh && _imdbRatingMemoryCache.containsKey(cleanId)) {
+      return _imdbRatingMemoryCache[cleanId]!;
+    }
+
+    final raw = await _get(
+      CinemanaRoutes.videoInfo(cleanId),
+      ttl: AppConfig.detailsCacheTtl,
+      refresh: refresh,
+      requireNonEmpty: true,
+    );
+
+    double directRating(Map<String, dynamic> map) {
+      for (final key in const ['stars']) {
+        final value = map[key];
+        final parsed = value is num
+            ? value.toDouble()
+            : double.tryParse(value?.toString().trim() ?? '');
+        if (parsed != null && parsed > 0 && parsed <= 10) return parsed;
+      }
+      return 0;
+    }
+
+    String mapId(Map<String, dynamic> map) => JsonUtils.string(
+          map,
+          const ['nb', 'videoId', 'videoID', 'id', 'item_id', '_id'],
+        ).trim();
+
+    // 1) Prefer an exact object with the requested video id.
+    for (final map in _flattenMaps(raw)) {
+      if (mapId(map) != cleanId) continue;
+      final value = directRating(map);
+      if (value > 0) {
+        _imdbRatingMemoryCache[cleanId] = value;
+        return value;
+      }
+    }
+
+    // 2) Cinemana often places the primary object under videoInfo without
+    // repeating the id. Check that primary object only, never arbitrary maps.
+    final primary = _firstMap(raw, keys: const ['videoInfo', 'video', 'data']);
+    final primaryId = mapId(primary);
+    if (primaryId.isEmpty || primaryId == cleanId) {
+      final value = directRating(primary);
+      if (value > 0) {
+        _imdbRatingMemoryCache[cleanId] = value;
+        return value;
+      }
+    }
+
+    _imdbRatingMemoryCache[cleanId] = 0;
+    return 0;
+  }
+
   Future<ContentDetails> details(String id, {bool refresh = false}) async {
     final raw = await _get(
       CinemanaRoutes.videoInfo(id),

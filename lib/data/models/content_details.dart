@@ -11,8 +11,8 @@ class Person {
   factory Person.fromJson(Map<String, dynamic> json) => Person(
     id: JsonUtils.string(json, ['id', 'staff_id', 'actorID', 'staffId']),
     name: JsonUtils.string(json, ['name', 'staffTitle', 'ar_title', 'title', 'display_name'], fallback: 'غير معروف'),
-    imageUrl: normalizeMediaUrl(JsonUtils.string(json, ['staff_img_medium_thumb', 'staff_img_thumb', 'staff_img', 'image', 'poster'])),
-    role: JsonUtils.string(json, ['role', 'character', 'job']),
+    imageUrl: normalizeMediaUrl(JsonUtils.string(json, ['staff_img_medium_thumb', 'staffImgMediumThumb', 'staff_img_thumb', 'staffImgThumb', 'staff_img', 'staffImg', 'image', 'poster'])),
+    role: _cleanPersonRole(JsonUtils.string(json, ['role', 'character', 'job', 'type'])),
   );
 }
 
@@ -59,4 +59,10 @@ class ContentDetails {
       parentalRating: JsonUtils.string(json, ['parentalControl', 'filmRating', 'mpaa']),
     );
   }
+}
+
+String _cleanPersonRole(String value) {
+  final v = value.trim();
+  if (v.isEmpty || RegExp(r'^\d+$').hasMatch(v)) return '';
+  return v;
 }

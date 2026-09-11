@@ -533,9 +533,45 @@ class WatchPartyService {
       'ready': true,
       'mediaId': mediaId,
       'positionMs': position.inMilliseconds,
+      'buffering': false,
+      'playing': false,
       'updatedAt': ServerValue.timestamp,
     });
   }
+
+  Future<void> updateMemberPlayback({
+    required String sessionId,
+    required String mediaId,
+    required Duration position,
+    required bool buffering,
+    required bool playing,
+    bool ready = true,
+  }) async {
+    final uid = _requiredUser.uid;
+    await _liveRoot(sessionId).child('presence/$uid').update({
+      'ready': ready,
+      'mediaId': mediaId,
+      'positionMs': position.inMilliseconds,
+      'buffering': buffering,
+      'playing': playing,
+      'updatedAt': ServerValue.timestamp,
+    });
+  }
+
+  Future<void> publishSystemPause({
+    required String sessionId,
+    required Duration position,
+    required double playbackRate,
+    required String reason,
+  }) =>
+      publishPlayback(
+        sessionId: sessionId,
+        action: 'system_pause',
+        position: position,
+        playing: false,
+        playbackRate: playbackRate,
+        systemReason: reason,
+      );
 
   Future<void> publishPlayback({
     required String sessionId,
@@ -545,6 +581,7 @@ class WatchPartyService {
     required double playbackRate,
     MediaItem? media,
     int executeAtMs = 0,
+    String? systemReason,
   }) async {
     final uid = _requiredUser.uid;
     final payload = <String, dynamic>{
@@ -556,6 +593,7 @@ class WatchPartyService {
       'playbackRate': playbackRate,
       'updatedAt': ServerValue.timestamp,
       'executeAtMs': executeAtMs,
+      if (systemReason != null) 'systemReason': systemReason,
       if (media != null) 'media': watchPartyMediaToJson(media),
     };
     await _liveRoot(sessionId).child('state').update(payload);
@@ -663,12 +701,18 @@ class WatchPartyPresenceConnection {
         'displayName': _member.displayName,
         'state': 'active',
         'ready': false,
+        'buffering': false,
+        'playing': false,
+        'positionMs': 0,
         'updatedAt': ServerValue.timestamp,
       });
       await _presence.onDisconnect().set({
         'displayName': _member.displayName,
         'state': 'left',
         'ready': false,
+        'buffering': false,
+        'playing': false,
+        'positionMs': 0,
         'updatedAt': ServerValue.timestamp,
       });
     } catch (error) {
@@ -696,6 +740,9 @@ class WatchPartyPresenceConnection {
       await _presence.set({
         'displayName': _member.displayName,
         'state': 'left',
+        'ready': false,
+        'buffering': false,
+        'playing': false,
         'updatedAt': ServerValue.timestamp,
       });
     } catch (_) {}

@@ -9,6 +9,7 @@ class Episode {
     required this.episodeNumber,
     this.posterUrl = '',
     this.duration = '',
+    this.rating = 0,
     this.description = '',
     this.raw = const {},
   });
@@ -19,6 +20,7 @@ class Episode {
   final int episodeNumber;
   final String posterUrl;
   final String duration;
+  final double rating;
   final String description;
   final Map<String, dynamic> raw;
 
@@ -30,7 +32,8 @@ class Episode {
       seasonNumber: JsonUtils.integer(json, ['season', 'seasonNumber'], fallback: 1),
       episodeNumber: ep,
       posterUrl: normalizeMediaUrl(JsonUtils.string(json, ['episodePoster', 'seasonPoster', 'poster', 'imgMediumThumbObjUrl', 'imgThumbObjUrl'])),
-      duration: JsonUtils.string(json, ['duration']),
+      duration: JsonUtils.string(json, ['duration', 'videoDuration', 'runtime']),
+      rating: JsonUtils.decimal(json, ['stars']),
       description: JsonUtils.string(json, ['ar_content', 'description', 'plot']),
       raw: json,
     );

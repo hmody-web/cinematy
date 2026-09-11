@@ -11,6 +11,12 @@ import 'data/stores/subtitle_settings_store.dart';
 
 final apiProvider = Provider<CinemanaApi>((ref) => CinemanaApi());
 
+final imdbRatingProvider = FutureProvider.family<double, String>((ref, id) async {
+  final cleanId = id.trim();
+  if (cleanId.isEmpty) return 0;
+  return ref.read(apiProvider).imdbRating(cleanId);
+});
+
 final libraryProvider = ChangeNotifierProvider<LibraryStore>((ref) {
   final store = LibraryStore();
   store.load();

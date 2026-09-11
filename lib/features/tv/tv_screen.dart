@@ -8,6 +8,8 @@ import '../../widgets/cinematy_top_bar.dart';
 import '../../widgets/network_image.dart';
 import '../../widgets/shimmer.dart';
 import 'tv_models.dart';
+import 'football_match_models.dart';
+import 'football_matches_service.dart';
 import 'tv_channel_group_screen.dart';
 import 'xtream_tv_service.dart';
 
@@ -21,8 +23,10 @@ class TvScreen extends StatefulWidget {
 class _TvScreenState extends State<TvScreen>
     with AutomaticKeepAliveClientMixin {
   final XtreamTvService _service = XtreamTvService();
+  final FootballMatchesService _matchesService = FootballMatchesService();
   final TextEditingController _searchController = TextEditingController();
   Timer? _searchDebounce;
+  Timer? _matchesRefreshTimer;
 
   List<TvCategory> _categories = const [];
   List<TvChannel> _channels = const [];
@@ -33,6 +37,9 @@ class _TvScreenState extends State<TvScreen>
   String? _error;
   String _query = '';
   int _requestSerial = 0;
+  List<FootballMatch> _todayMatches = const [];
+  bool _loadingMatches = true;
+  String? _matchesError;
 
   @override
   bool get wantKeepAlive => true;
@@ -41,13 +48,44 @@ class _TvScreenState extends State<TvScreen>
   void initState() {
     super.initState();
     _loadInitial();
+    _loadMatches();
+    _matchesRefreshTimer = Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _loadMatches(silent: true),
+    );
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _matchesRefreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadMatches({bool silent = false}) async {
+    if (!silent && mounted) {
+      setState(() {
+        _loadingMatches = true;
+        _matchesError = null;
+      });
+    }
+    try {
+      final matches = await _matchesService.getTodayMatches();
+      if (!mounted) return;
+      setState(() {
+        _todayMatches = matches;
+        _loadingMatches = false;
+        _matchesError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      // Keep the TV screen usable, but surface the football-feed failure.
+      setState(() {
+        _loadingMatches = false;
+        _matchesError = e.toString();
+      });
+    }
   }
 
   Future<void> _loadInitial() async {
@@ -134,7 +172,9 @@ class _TvScreenState extends State<TvScreen>
     return Scaffold(
       appBar: const CinematyTopBar(section: 'التلفاز'),
       body: RefreshIndicator(
-        onRefresh: _loadInitial,
+        onRefresh: () async {
+          await Future.wait([_loadInitial(), _loadMatches()]);
+        },
         child: CustomScrollView(
           key: const PageStorageKey('tv-scroll'),
           physics: const AlwaysScrollableScrollPhysics(),
@@ -146,6 +186,14 @@ class _TvScreenState extends State<TvScreen>
                   controller: _searchController,
                   onChanged: _onSearch,
                 ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: _TodayMatchesStrip(
+                matches: _todayMatches,
+                loading: _loadingMatches,
+                error: _matchesError,
+                onRetry: _loadMatches,
               ),
             ),
             SliverToBoxAdapter(
@@ -485,6 +533,412 @@ class _ChannelSkeletonGrid extends StatelessWidget {
         ),
         childCount: 10,
       ),
+    );
+  }
+}
+
+
+class _TodayMatchesStrip extends StatelessWidget {
+  const _TodayMatchesStrip({
+    required this.matches,
+    required this.loading,
+    required this.error,
+    required this.onRetry,
+  });
+
+  final List<FootballMatch> matches;
+  final bool loading;
+  final String? error;
+  final Future<void> Function({bool silent}) onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasLive = matches.any((m) => m.isLive);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+            child: Row(
+              children: [
+                const Text(
+                  'مباريات اليوم',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                ),
+                if (hasLive) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.redBright.withOpacity(.12),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: AppColors.redBright.withOpacity(.28)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _LiveDot(),
+                        SizedBox(width: 5),
+                        Text('مباشر', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppColors.redBright)),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Directionality(
+            textDirection: TextDirection.rtl,
+            child: SizedBox(
+              height: 132,
+              child: loading
+                ? ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    itemCount: 3,
+                    separatorBuilder: (_, __) => const SizedBox(width: 10),
+                    itemBuilder: (_, __) => Container(
+                      width: 238,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(.045),
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(color: Colors.white.withOpacity(.055)),
+                      ),
+                    ),
+                  )
+                : matches.isNotEmpty
+                    ? ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 18),
+                        physics: const BouncingScrollPhysics(),
+                        itemCount: matches.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 10),
+                        itemBuilder: (_, index) => _MatchCard(match: matches[index]),
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 18),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(.035),
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(color: Colors.white.withOpacity(.06)),
+                          ),
+                          child: Row(
+                            children: [
+                              const SizedBox(width: 16),
+                              Icon(
+                                error == null ? Icons.sports_soccer_rounded : Icons.cloud_off_rounded,
+                                color: Colors.white.withOpacity(.45),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  error == null
+                                      ? 'لا توجد مباريات متاحة حالياً.'
+                                      : 'تعذر تحميل مباريات اليوم. اضغط لإعادة المحاولة.',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(.66),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'إعادة المحاولة',
+                                onPressed: () => onRetry(silent: false),
+                                icon: const Icon(Icons.refresh_rounded),
+                              ),
+                              const SizedBox(width: 6),
+                            ],
+                          ),
+                        ),
+                      ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveDot extends StatelessWidget {
+  const _LiveDot();
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 6,
+        height: 6,
+        decoration: const BoxDecoration(color: AppColors.redBright, shape: BoxShape.circle),
+      );
+}
+
+class _MatchCard extends StatelessWidget {
+  const _MatchCard({required this.match});
+  final FootballMatch match;
+
+  String _arabicLeagueName(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return 'كرة القدم';
+    final name = value.toLowerCase();
+
+    if (name.contains('premier league') &&
+        (name.contains('england') || name == 'premier league' || name.contains('english'))) {
+      return 'الدوري الإنجليزي الممتاز';
+    }
+    if (name.contains('la liga') || name.contains('laliga') || name.contains('primera division')) {
+      return 'الدوري الإسباني';
+    }
+    if (name.contains('serie a') && (name.contains('ital') || name == 'serie a')) {
+      return 'الدوري الإيطالي';
+    }
+    if (name.contains('bundesliga')) return 'الدوري الألماني';
+    if (name.contains('ligue 1')) return 'الدوري الفرنسي';
+
+    if (name == 'rsl' ||
+        name.contains('saudi pro league') ||
+        name.contains('saudi professional league') ||
+        name.contains('saudi arabia pro league') ||
+        name.contains('saudi arabia - pro league') ||
+        name.contains('roshn saudi league') ||
+        name.contains('roshn saudi pro league') ||
+        name.contains('roshn league') ||
+        name.contains('roshn') ||
+        name.contains('دوري روشن') ||
+        name.contains('الدوري السعودي')) {
+      return 'دوري روشن السعودي';
+    }
+    if (name.contains('iraq stars league') ||
+        name.contains('iraqi stars league') ||
+        name.contains('iraq premier league') ||
+        name.contains('iraqi premier league') ||
+        name.contains('دوري نجوم العراق')) {
+      return 'دوري نجوم العراق';
+    }
+    // CAF Champions League is intentionally not part of this scoreboard.
+    if (name.contains('afc champions league elite')) return 'دوري أبطال آسيا للنخبة';
+    if (name.contains('afc champions league two')) return 'دوري أبطال آسيا 2';
+    if (name.contains('afc champions league')) return 'دوري أبطال آسيا';
+    if (name.contains('uefa champions league') ||
+        name.contains('europe champions league') ||
+        name.contains('european champions league')) {
+      return 'دوري أبطال أوروبا';
+    }
+
+    if (name.contains('afc asian cup') ||
+        name == 'asian cup' ||
+        name.contains('asian cup qualification') ||
+        name.contains('asian cup qualifier')) {
+      return name.contains('qualif') ? 'تصفيات كأس آسيا' : 'كأس آسيا';
+    }
+    if (name.contains('arabian gulf cup') ||
+        name.contains('gulf cup') ||
+        name.contains('khaleeji') ||
+        name.contains('خليجي')) {
+      return 'كأس الخليج العربي';
+    }
+    if (name.contains('africa cup of nations') ||
+        name.contains('african cup of nations') ||
+        name.contains('afcon')) {
+      return name.contains('qualif') ? 'تصفيات كأس أمم أفريقيا' : 'كأس أمم أفريقيا';
+    }
+
+    if (name.contains('fifa world cup') || name == 'world cup') {
+      return name.contains('qualif') ? 'تصفيات كأس العالم' : 'كأس العالم';
+    }
+    if (name.contains('world cup qualification') || name.contains('world cup qualifier')) {
+      return 'تصفيات كأس العالم';
+    }
+    if (name.contains('uefa euro') || name == 'euro' || name.contains('european championship')) {
+      return name.contains('qualif') ? 'تصفيات كأس أمم أوروبا' : 'كأس أمم أوروبا';
+    }
+    if (name.contains('copa america')) return 'كوبا أمريكا';
+    if (name.contains('uefa nations league')) return 'دوري الأمم الأوروبية';
+    if (name.contains('concacaf nations league')) return 'دوري أمم الكونكاكاف';
+    if (name.contains('friendly') || name.contains('international friendly')) return 'مباراة دولية ودية';
+
+    if (name == 'mls' || name.contains('major league soccer') || name.contains('usa mls')) {
+      return 'الدوري الأمريكي';
+    }
+
+    return value;
+  }
+
+  String _timeLabel(BuildContext context) {
+    if (match.isLive) {
+      final minute = match.minute;
+      return minute == null ? 'مباشر' : "$minute′";
+    }
+    if (match.isFinished) return 'انتهت';
+    if (match.status == FootballMatchStatus.postponed) return 'مؤجلة';
+    final date = match.startsAt;
+    if (date == null) return 'قريباً';
+    return TimeOfDay.fromDateTime(date).format(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showScore = match.isLive || match.isFinished ||
+        (match.homeScore != null && match.awayScore != null);
+    return Container(
+      width: 238,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: LinearGradient(
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+          stops: const [0.0, .48, 1.0],
+          colors: match.isLive
+              ? [
+                  const Color(0xFF321014),
+                  const Color(0xFF17090B),
+                  const Color(0xFF09090B),
+                ]
+              : [
+                  const Color(0xFF230D10),
+                  const Color(0xFF130A0C),
+                  const Color(0xFF09090B),
+                ],
+        ),
+        border: Border.all(
+          color: match.isLive
+              ? AppColors.redBright.withOpacity(.34)
+              : AppColors.redBright.withOpacity(.13),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(.30),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+          BoxShadow(
+            color: AppColors.redBright.withOpacity(match.isLive ? .10 : .045),
+            blurRadius: 22,
+            spreadRadius: -8,
+            offset: const Offset(6, -4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(21),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 11, 14, 12),
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: const Alignment(.82, -.88),
+              radius: 1.18,
+              colors: [
+                AppColors.redBright.withOpacity(match.isLive ? .13 : .065),
+                AppColors.redBright.withOpacity(.018),
+                Colors.transparent,
+              ],
+              stops: const [0.0, .42, 1.0],
+            ),
+          ),
+          child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Row(
+                  children: [
+                    if (match.leagueLogo.isNotEmpty) ...[
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(5),
+                        child: Image.network(
+                          match.leagueLogo,
+                          width: 18,
+                          height: 18,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Expanded(
+                      child: Text(
+                        _arabicLeagueName(match.league),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white.withOpacity(.48)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _timeLabel(context),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: match.isLive ? AppColors.redBright : Colors.white.withOpacity(.76),
+                ),
+              ),
+            ],
+          ),
+          const Spacer(),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: _MatchTeam(name: match.homeName, logo: match.homeLogo)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: showScore
+                    ? Text(
+                        '${match.homeScore ?? 0}  -  ${match.awayScore ?? 0}',
+                        textDirection: TextDirection.ltr,
+                        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: .4),
+                      )
+                    : Text(
+                        'VS',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.white.withOpacity(.28)),
+                      ),
+              ),
+              Expanded(child: _MatchTeam(name: match.awayName, logo: match.awayLogo)),
+            ],
+          ),
+          const Spacer(),
+        ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MatchTeam extends StatelessWidget {
+  const _MatchTeam({required this.name, required this.logo});
+  final String name;
+  final String logo;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 36,
+          height: 36,
+          child: logo.isEmpty
+              ? Icon(Icons.shield_rounded, size: 30, color: Colors.white.withOpacity(.28))
+              : ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: CinematyNetworkImage(
+                    url: logo,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+        ),
+        const SizedBox(height: 7),
+        Text(
+          name,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800),
+        ),
+      ],
     );
   }
 }

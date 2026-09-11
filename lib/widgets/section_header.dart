@@ -26,7 +26,7 @@ class SectionHeader extends StatelessWidget {
             ),
           ),
           if (onMore != null)
-            TextButton(onPressed: onMore, child: const Text('عرض الكل')),
+            TextButton(onPressed: onMore, child: const Text('المزيد')),
         ],
       ),
     );

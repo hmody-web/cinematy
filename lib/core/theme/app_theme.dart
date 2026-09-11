@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 class AppColors {
@@ -69,16 +70,18 @@ class AppTheme {
         backgroundColor: Colors.white.withOpacity(.055),
       ),
       pageTransitionsTheme: const PageTransitionsTheme(builders: {
-        TargetPlatform.iOS: _CinematyOpaqueTransitionsBuilder(),
-        TargetPlatform.android: _CinematyOpaqueTransitionsBuilder(),
+        TargetPlatform.iOS: _CinematyOpaqueCupertinoTransitionsBuilder(),
+        TargetPlatform.android: _CinematyOpaqueCupertinoTransitionsBuilder(),
       }),
     );
   }
 }
 
-
-class _CinematyOpaqueTransitionsBuilder extends PageTransitionsBuilder {
-  const _CinematyOpaqueTransitionsBuilder();
+/// Restores Cinematy's previous horizontal page motion while keeping every
+/// frame of the incoming page completely opaque. There is deliberately no
+/// FadeTransition here: opacity stays at 1.0 throughout push and pop.
+class _CinematyOpaqueCupertinoTransitionsBuilder extends PageTransitionsBuilder {
+  const _CinematyOpaqueCupertinoTransitionsBuilder();
 
   @override
   Widget buildTransitions<T>(
@@ -88,20 +91,21 @@ class _CinematyOpaqueTransitionsBuilder extends PageTransitionsBuilder {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    // الخلفية تظهر من أول إطار، لذلك لا تظهر الصفحة السابقة من خلال
-    // الصفحات الشفافة أثناء الانتقال.
-    return Stack(
+    final opaqueChild = Stack(
       fit: StackFit.expand,
       children: [
         const _RouteBackdrop(),
-        FadeTransition(
-          opacity: CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-          ),
-          child: child,
-        ),
+        child,
       ],
+    );
+
+    // Keep the same iOS-style horizontal slide on both platforms. This gives
+    // the old enter/exit movement back without ever fading the page itself.
+    return CupertinoPageTransition(
+      primaryRouteAnimation: animation,
+      secondaryRouteAnimation: secondaryAnimation,
+      linearTransition: false,
+      child: opaqueChild,
     );
   }
 }

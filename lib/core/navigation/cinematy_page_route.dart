@@ -1,15 +1,27 @@
 import 'package:flutter/cupertino.dart';
 
-/// A single route style for Cinematy that keeps Flutter's native interactive
-/// Cupertino back gesture available on both iOS and Android. Because Cinematy
-/// runs RTL, the back gesture starts at the right edge and moves to the left.
+import '../theme/app_theme.dart';
+
+/// The shared page route used across Cinematy.
+///
+/// It keeps Flutter's native interactive Cupertino back gesture on iOS and
+/// Android, while giving every pushed route its own fully opaque background.
+/// This is important because most Cinematy screens intentionally use a
+/// transparent [Scaffold] so the app backdrop can be seen. Without an opaque
+/// route layer, the previous page becomes visible through the current page
+/// while pushing or interactively swiping back.
 class CinematyPageRoute<T> extends CupertinoPageRoute<T> {
   CinematyPageRoute({
-    required super.builder,
+    required WidgetBuilder builder,
     super.settings,
     super.maintainState = true,
     super.fullscreenDialog = false,
-  });
+  }) : super(
+          builder: (context) => ColoredBox(
+            color: AppColors.background,
+            child: builder(context),
+          ),
+        );
 
   @override
   Duration get transitionDuration => const Duration(milliseconds: 320);

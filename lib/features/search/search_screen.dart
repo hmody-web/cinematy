@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/cinematy_user.dart';
+import '../../data/models/category.dart';
 import '../../data/models/media_item.dart';
 import '../../data/services/cinematy_account_api.dart';
 import '../../providers.dart';
@@ -37,6 +39,51 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   String _filter = 'الكل';
   String? _error;
   int _requestSerial = 0;
+  List<String> _recentSearches = const [];
+  List<int> _availableYears = const [];
+  List<MediaCategory> _categories = const [];
+  int? _fromYear;
+  int? _toYear;
+  String _categoryId = '';
+  String _categoryTitle = '';
+
+  bool get _hasAdvancedFilters => _fromYear != null || _toYear != null || _categoryId.isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSearchMeta();
+  }
+
+  Future<void> _loadSearchMeta() async {
+    final prefs = await SharedPreferences.getInstance();
+    final api = ref.read(apiProvider);
+    final values = await Future.wait<dynamic>([
+      api.availableSearchYears(),
+      api.categories().catchError((_) => <MediaCategory>[]),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _recentSearches = prefs.getStringList('cinematy_recent_searches') ?? const [];
+      _availableYears = values[0] as List<int>;
+      _categories = values[1] as List<MediaCategory>;
+    });
+  }
+
+  Future<void> _rememberSearch(String query) async {
+    final q = query.trim();
+    if (q.length < 2) return;
+    final next = <String>[q, ..._recentSearches.where((e) => e.toLowerCase() != q.toLowerCase())].take(8).toList();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('cinematy_recent_searches', next);
+    if (mounted) setState(() => _recentSearches = next);
+  }
+
+  Future<void> _clearRecentSearches() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('cinematy_recent_searches');
+    if (mounted) setState(() => _recentSearches = const []);
+  }
 
   @override
   bool get wantKeepAlive => true;
@@ -59,7 +106,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   Future<void> _search(String value) async {
     final q = value.trim();
     final serial = ++_requestSerial;
-    if (q.length < 2) {
+    if ((_usersMode && q.length < 2) || (!_usersMode && q.length < 2 && !_hasAdvancedFilters)) {
       if (!mounted) return;
       setState(() {
         _allResults = const [];
@@ -97,7 +144,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         return;
       }
 
-      final data = await ref.read(apiProvider).searchAll(q);
+      final api = ref.read(apiProvider);
+      final data = _hasAdvancedFilters
+          ? await api.search(
+              q,
+              category: _categoryId,
+              fromYear: _fromYear,
+              toYear: _toYear,
+            )
+          : await api.searchAll(q);
       if (!mounted || serial != _requestSerial) return;
       _allResults = data;
       _applyFilter();
@@ -134,9 +189,116 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         _users = const [];
       }
     });
-    if (_controller.text.trim().length >= 2) {
+    if (_controller.text.trim().length >= 2 || _hasAdvancedFilters) {
       _search(_controller.text);
     }
+  }
+
+  Future<void> _openFilters() async {
+    var from = _fromYear;
+    var to = _toYear;
+    var categoryId = _categoryId;
+    var categoryTitle = _categoryTitle;
+
+    final applied = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surfaceHigh,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final years = _availableYears.isNotEmpty
+              ? _availableYears
+              : [for (var y = DateTime.now().year; y >= 1970; y--) y];
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(18, 18, 18, 18 + MediaQuery.viewInsetsOf(context).bottom),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    const Expanded(child: Text('فلترة البحث', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900))),
+                    IconButton(onPressed: () => Navigator.pop(context, false), icon: const Icon(Icons.close_rounded)),
+                  ]),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: DropdownButtonFormField<int?>(
+                        value: from,
+                        dropdownColor: const Color(0xFF211A1A),
+                        menuMaxHeight: 360,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        decoration: const InputDecoration(labelText: 'من سنة', filled: true, fillColor: Color(0xFF1A1515)),
+                        items: [
+                          const DropdownMenuItem<int?>(value: null, child: Text('الكل')),
+                          ...years.map((y) => DropdownMenuItem<int?>(value: y, child: Text('$y'))),
+                        ],
+                        onChanged: (v) => setSheetState(() => from = v),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: DropdownButtonFormField<int?>(
+                        value: to,
+                        dropdownColor: const Color(0xFF211A1A),
+                        menuMaxHeight: 360,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        decoration: const InputDecoration(labelText: 'إلى سنة', filled: true, fillColor: Color(0xFF1A1515)),
+                        items: [
+                          const DropdownMenuItem<int?>(value: null, child: Text('الكل')),
+                          ...years.map((y) => DropdownMenuItem<int?>(value: y, child: Text('$y'))),
+                        ],
+                        onChanged: (v) => setSheetState(() => to = v),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: categoryId.isEmpty ? '' : categoryId,
+                    isExpanded: true,
+                    dropdownColor: const Color(0xFF211A1A),
+                    menuMaxHeight: 380,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                    decoration: const InputDecoration(labelText: 'الفئة', filled: true, fillColor: Color(0xFF1A1515)),
+                    items: [
+                      const DropdownMenuItem<String>(value: '', child: Text('كل الفئات')),
+                      ..._categories.map((c) => DropdownMenuItem<String>(value: c.id, child: Text(c.title, overflow: TextOverflow.ellipsis))),
+                    ],
+                    onChanged: (v) {
+                      setSheetState(() {
+                        categoryId = v ?? '';
+                        categoryTitle = categoryId.isEmpty ? '' : _categories.firstWhere((c) => c.id == categoryId, orElse: () => MediaCategory(id: categoryId, title: '')).title;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 18),
+                  FilledButton.icon(
+                    onPressed: () => Navigator.pop(context, true),
+                    icon: const Icon(Icons.search_rounded),
+                    label: const Text('تطبيق الفلاتر'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    if (applied != true || !mounted) return;
+    if (from != null && to != null && from! > to!) {
+      final t = from;
+      from = to;
+      to = t;
+    }
+    setState(() {
+      _fromYear = from;
+      _toYear = to;
+      _categoryId = categoryId;
+      _categoryTitle = categoryTitle;
+    });
+    _search(_controller.text);
   }
 
   @override
@@ -208,6 +370,36 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               ),
             ),
           ),
+          if (!_usersMode)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 2),
+                child: Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _openFilters,
+                      icon: Icon(_hasAdvancedFilters ? Icons.filter_alt_rounded : Icons.filter_alt_outlined, size: 19),
+                      label: Text(_hasAdvancedFilters ? 'الفلاتر مفعّلة' : 'فلترة'),
+                    ),
+                    if (_hasAdvancedFilters) ...[
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _fromYear = null;
+                            _toYear = null;
+                            _categoryId = '';
+                            _categoryTitle = '';
+                          });
+                          _search(_controller.text);
+                        },
+                        child: const Text('مسح الفلاتر'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
           if (_usersMode)
             ..._buildUsersSlivers()
           else
@@ -380,14 +572,45 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       ];
     }
 
-    if (_controller.text.trim().length < 2) {
+    if (_controller.text.trim().length < 2 && !_hasAdvancedFilters) {
+      if (_recentSearches.isNotEmpty) {
+        return [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+              child: Row(children: [
+                const Expanded(child: Text('عمليات البحث الأخيرة', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900))),
+                TextButton(onPressed: _clearRecentSearches, child: const Text('مسح')),
+              ]),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _recentSearches.map((q) => ActionChip(
+                  avatar: const Icon(Icons.history_rounded, size: 17),
+                  label: Text(q),
+                  onPressed: () {
+                    _controller.text = q;
+                    _controller.selection = TextSelection.collapsed(offset: q.length);
+                    _search(q);
+                  },
+                )).toList(),
+              ),
+            ),
+          ),
+        ];
+      }
       return const [
         SliverFillRemaining(
           hasScrollBody: false,
           child: EmptyState(
             icon: Icons.search_rounded,
             title: 'شنو تحب تشوف اليوم؟',
-            message: 'اكتب حرفين أو أكثر للبحث عن الأفلام والمسلسلات والممثلين.',
+            message: 'اكتب حرفين أو أكثر، أو استخدم فلترة السنة والفئة.',
           ),
         ),
       ];
@@ -430,9 +653,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             return MediaPosterCard(
               item: item,
               width: double.infinity,
-              onTap: () => Navigator.of(context).push(
-                CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
-              ),
+              onTap: () {
+                _rememberSearch(_controller.text);
+                Navigator.of(context).push(
+                  CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
+                );
+              },
             );
           },
         ),

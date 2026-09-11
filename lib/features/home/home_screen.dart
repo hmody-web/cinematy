@@ -12,6 +12,7 @@ import '../../data/models/network_access_state.dart';
 import '../../providers.dart';
 import '../../widgets/cinematy_top_bar.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/imdb_badge.dart';
 import '../../widgets/media_card.dart';
 import '../../widgets/network_image.dart';
 import '../../widgets/section_header.dart';
@@ -621,11 +622,7 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                               children: [
                                 Row(
                                   children: [
-                                    if (item.rating > 0)
-                                      _HeroPill(
-                                        icon: Icons.star_rounded,
-                                        label: item.rating.toStringAsFixed(1),
-                                      ),
+                                    ImdbBadge(item: item, compact: true),
                                     if (item.year > 0) ...[
                                       const SizedBox(width: 7),
                                       _HeroPill(label: '${item.year}'),
@@ -647,32 +644,7 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                                     height: 1.05,
                                   ),
                                 ),
-                                const SizedBox(height: 9),
-                                Row(
-                                  children: [
-                                    FilledButton.icon(
-                                      onPressed: () => widget.onOpen(item),
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: Colors.white,
-                                        foregroundColor: AppColors.background,
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 14,
-                                          vertical: 9,
-                                        ),
-                                      ),
-                                      icon: const Icon(Icons.play_arrow_rounded),
-                                      label: const Text(
-                                        'مشاهدة',
-                                        style: TextStyle(fontWeight: FontWeight.w900),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    IconButton.filledTonal(
-                                      onPressed: () => widget.onOpen(item),
-                                      icon: const Icon(Icons.info_outline_rounded),
-                                    ),
-                                  ],
-                                ),
+
                               ],
                             ),
                           ),

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -47,15 +48,27 @@ class DiscoverScreen extends ConsumerWidget {
           }
           return GridView.builder(
             key: const PageStorageKey('discover-scroll'),
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 130),
+            padding: EdgeInsets.fromLTRB(
+              kIsWeb ? 30 : 18,
+              kIsWeb ? 24 : 14,
+              kIsWeb ? 30 : 18,
+              kIsWeb ? 48 : 130,
+            ),
             cacheExtent: 1800,
             itemCount: items.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: 1.36,
-            ),
+            gridDelegate: kIsWeb
+                ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 520,
+                    crossAxisSpacing: 20,
+                    mainAxisSpacing: 20,
+                    childAspectRatio: 16 / 9,
+                  )
+                : const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 12,
+                    childAspectRatio: 1.36,
+                  ),
             itemBuilder: (_, i) => _CategoryMosaicCard(category: items[i], seed: i),
           );
         },
@@ -69,98 +82,154 @@ class _DiscoverSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => GridView.builder(
-        padding: const EdgeInsets.fromLTRB(18, 14, 18, 130),
+        padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 24 : 14, kIsWeb ? 30 : 18, kIsWeb ? 48 : 130),
         itemCount: 8,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.36,
-        ),
+        gridDelegate: kIsWeb
+            ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 520,
+                crossAxisSpacing: 20,
+                mainAxisSpacing: 20,
+                childAspectRatio: 16 / 9,
+              )
+            : const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                childAspectRatio: 1.36,
+              ),
         itemBuilder: (_, __) => const SkeletonBox(radius: 26),
       );
 }
 
-class _CategoryMosaicCard extends ConsumerWidget {
+class _CategoryMosaicCard extends ConsumerStatefulWidget {
   const _CategoryMosaicCard({required this.category, required this.seed});
   final MediaCategory category;
   final int seed;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // لا يوجد أي طلب شبكة خاص بالكرت. غلافه يأتي مباشرة من /categories مثل
-    // تطبيق Cinemana الأصلي، لذلك يظهر فور وصول قائمة التصنيفات.
-    final cachedItems = ref.read(apiProvider).categoryCachedVideos(category.id);
+  ConsumerState<_CategoryMosaicCard> createState() =>
+      _CategoryMosaicCardState();
+}
+
+class _CategoryMosaicCardState extends ConsumerState<_CategoryMosaicCard> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final cachedItems =
+        ref.read(apiProvider).categoryCachedVideos(widget.category.id);
     final posterItems = cachedItems
         .where((e) => e.posterUrl.trim().isNotEmpty)
         .take(6)
         .toList(growable: false);
 
-    return InkWell(
-      onTap: () {
-        final ready = ref.read(apiProvider).categoryCachedVideos(category.id);
-        Navigator.of(context).push(
-          CinematyPageRoute(
-            builder: (_) => CategoryScreen(category: category, initialItems: ready),
+    return AnimatedScale(
+      scale: kIsWeb && _focused ? 1.04 : 1,
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOutCubic,
+      child: InkWell(
+        onFocusChange: (value) {
+          if (!kIsWeb || _focused == value) return;
+          setState(() => _focused = value);
+        },
+        focusColor: Colors.transparent,
+        hoverColor: Colors.white.withOpacity(.025),
+        onTap: () {
+          final ready =
+              ref.read(apiProvider).categoryCachedVideos(widget.category.id);
+          Navigator.of(context).push(
+            CinematyPageRoute(
+              builder: (_) => CategoryScreen(
+                category: widget.category,
+                initialItems: ready,
+              ),
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(26),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(
+              color: kIsWeb && _focused
+                  ? Colors.white.withOpacity(.95)
+                  : Colors.white.withOpacity(.07),
+              width: kIsWeb && _focused ? 2.2 : 1,
+            ),
+            boxShadow: [
+              const BoxShadow(
+                color: Color(0x33000000),
+                blurRadius: 22,
+                offset: Offset(0, 10),
+              ),
+              if (kIsWeb && _focused)
+                BoxShadow(
+                  color: AppColors.redBright.withOpacity(.24),
+                  blurRadius: 26,
+                  spreadRadius: 1,
+                ),
+            ],
           ),
-        );
-      },
-      borderRadius: BorderRadius.circular(26),
-      child: Ink(
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(26),
-          border: Border.all(color: Colors.white.withOpacity(.07)),
-          boxShadow: const [
-            BoxShadow(color: Color(0x33000000), blurRadius: 22, offset: Offset(0, 10)),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(25),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (posterItems.length >= 3)
-                _ScatteredPosterMosaic(items: posterItems, seed: seed)
-              else if (category.coverUrl.isNotEmpty)
-                CinematyNetworkImage(url: category.coverUrl, memCacheWidth: 560)
-              else
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(25),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (posterItems.length >= 3)
+                  _ScatteredPosterMosaic(
+                    items: posterItems,
+                    seed: widget.seed,
+                  )
+                else if (widget.category.coverUrl.isNotEmpty)
+                  CinematyNetworkImage(
+                    url: widget.category.coverUrl,
+                    memCacheWidth: kIsWeb ? 900 : 560,
+                  )
+                else
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topRight,
+                        end: Alignment.bottomLeft,
+                        colors: [AppColors.surfaceHigh, AppColors.background],
+                      ),
+                    ),
+                  ),
                 const DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      begin: Alignment.topRight,
-                      end: Alignment.bottomLeft,
-                      colors: [AppColors.surfaceHigh, AppColors.background],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: [0, .40, 1],
+                      colors: [
+                        Color(0x12000000),
+                        Color(0x50000000),
+                        Color(0xEE070505),
+                      ],
                     ),
                   ),
                 ),
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    stops: [0, .40, 1],
-                    colors: [Color(0x12000000), Color(0x50000000), Color(0xEE070505)],
+                Positioned(
+                  right: kIsWeb ? 22 : 15,
+                  left: kIsWeb ? 22 : 15,
+                  bottom: kIsWeb ? 20 : 13,
+                  child: Text(
+                    widget.category.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: kIsWeb ? 28 : 18,
+                      height: 1.05,
+                      shadows: const [
+                        Shadow(color: Colors.black, blurRadius: 8),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              Positioned(
-                right: 15,
-                left: 15,
-                bottom: 13,
-                child: Text(
-                  category.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 18,
-                    height: 1.05,
-                    shadows: [Shadow(color: Colors.black, blurRadius: 8)],
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

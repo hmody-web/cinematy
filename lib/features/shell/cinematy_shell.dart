@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -56,18 +57,49 @@ class _CinematyShellState extends State<CinematyShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final content = NotificationListener<UserScrollNotification>(
+      onNotification: _onUserScroll,
+      child: IndexedStack(index: _index, children: _screens),
+    );
+
+    // Keep the existing native mobile/tablet layout completely untouched.
+    if (!kIsWeb) {
+      return Scaffold(
+        backgroundColor: Colors.transparent,
+        extendBody: true,
+        body: content,
+        bottomNavigationBar: GlassNavigationBar(
+          index: _index,
+          compact: _compactNavigation,
+          onChanged: _changeTab,
+        ),
+      );
+    }
+
+    // Chrome is our lightweight TV preview. TV navigation is intentionally
+    // isolated here: a full-height rail on the RIGHT, while phone/tablet
+    // continue using their native bottom bars exactly as before.
+    final tvPreview = Scaffold(
       backgroundColor: Colors.transparent,
-      extendBody: true,
-      body: NotificationListener<UserScrollNotification>(
-        onNotification: _onUserScroll,
-        child: IndexedStack(index: _index, children: _screens),
+      body: Row(
+        textDirection: TextDirection.rtl,
+        children: [
+          SizedBox(
+            width: 132,
+            child: GlassNavigationBar(
+              index: _index,
+              compact: false,
+              onChanged: _changeTab,
+            ),
+          ),
+          Expanded(child: content),
+        ],
       ),
-      bottomNavigationBar: GlassNavigationBar(
-        index: _index,
-        compact: _compactNavigation,
-        onChanged: _changeTab,
-      ),
+    );
+
+    return FocusTraversalGroup(
+      policy: ReadingOrderTraversalPolicy(),
+      child: tvPreview,
     );
   }
 }

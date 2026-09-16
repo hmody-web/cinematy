@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 class ApiDiskCache {
@@ -24,6 +25,8 @@ class ApiDiskCache {
     final memory = _memory[key];
     if (memory != null && now.difference(memory.createdAt) < ttl) return memory.value;
 
+    if (kIsWeb) return null;
+
     try {
       final dir = await _dir();
       final file = File('${dir.path}/${_hash(key)}.json');
@@ -45,6 +48,7 @@ class ApiDiskCache {
   Future<void> put(String key, dynamic value) async {
     final now = DateTime.now();
     _memory[key] = _MemoryEntry(value, now);
+    if (kIsWeb) return;
     try {
       final dir = await _dir();
       final file = File('${dir.path}/${_hash(key)}.json');
@@ -54,6 +58,7 @@ class ApiDiskCache {
 
   Future<void> clear() async {
     _memory.clear();
+    if (kIsWeb) return;
     try {
       final dir = await _dir();
       if (await dir.exists()) {

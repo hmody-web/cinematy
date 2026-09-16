@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -547,12 +548,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           padding: const EdgeInsets.fromLTRB(18, 14, 18, 130),
           sliver: SliverGrid.builder(
             itemCount: 9,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 16,
-              childAspectRatio: .52,
-            ),
+            gridDelegate: kIsWeb
+                ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 300,
+                    crossAxisSpacing: 22,
+                    mainAxisSpacing: 26,
+                    childAspectRatio: .54,
+                  )
+                : const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 16,
+                    childAspectRatio: .52,
+                  ),
             itemBuilder: (_, __) => const SkeletonPosterCard(width: double.infinity),
           ),
         ),
@@ -631,7 +639,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return [
       SliverToBoxAdapter(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+          padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 24 : 16, kIsWeb ? 30 : 18, 0),
           child: Text(
             '${_results.length} نتيجة',
             style: const TextStyle(fontWeight: FontWeight.w900),
@@ -639,15 +647,22 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         ),
       ),
       SliverPadding(
-        padding: const EdgeInsets.fromLTRB(18, 14, 18, 130),
+        padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 20 : 14, kIsWeb ? 30 : 18, kIsWeb ? 48 : 130),
         sliver: SliverGrid.builder(
           itemCount: _results.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 16,
-            childAspectRatio: .52,
-          ),
+          gridDelegate: kIsWeb
+              ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 300,
+                  crossAxisSpacing: 22,
+                  mainAxisSpacing: 26,
+                  childAspectRatio: .54,
+                )
+              : const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: .52,
+                ),
           itemBuilder: (_, i) {
             final item = _results[i];
             return MediaPosterCard(

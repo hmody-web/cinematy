@@ -17,10 +17,7 @@ import 'package:flutter/foundation.dart'
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
-      throw UnsupportedError(
-        'DefaultFirebaseOptions have not been configured for web - '
-        'you can reconfigure this by running the FlutterFire CLI again.',
-      );
+      return web;
     }
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
@@ -54,6 +51,7 @@ class DefaultFirebaseOptions {
     appId: '1:973890908256:android:cf4b352c02147d0a545305',
     messagingSenderId: '973890908256',
     projectId: 'cinematy-app',
+    databaseURL: 'https://cinematy-app-default-rtdb.europe-west1.firebasedatabase.app',
     storageBucket: 'cinematy-app.firebasestorage.app',
   );
   static const FirebaseOptions ios = FirebaseOptions(
@@ -61,9 +59,20 @@ class DefaultFirebaseOptions {
     appId: '1:973890908256:ios:bfc5068322f9cf26545305',
     messagingSenderId: '973890908256',
     projectId: 'cinematy-app',
+    databaseURL: 'https://cinematy-app-default-rtdb.europe-west1.firebasedatabase.app',
     storageBucket: 'cinematy-app.firebasestorage.app',
-    androidClientId: '973890908256-ee3nm882sppk8t6kt0vd0gp3i1rk2ppc.apps.googleusercontent.com',
+    androidClientId: '973890908256-vc58q9li4kb2fd1e5s4v4phc53can5e1.apps.googleusercontent.com',
     iosClientId: '973890908256-7jgno3lov2klrfiei0n50o1ju1l1vto2.apps.googleusercontent.com',
     iosBundleId: 'com.cinematy.app',
+  );
+
+  static const FirebaseOptions web = FirebaseOptions(
+    apiKey: 'AIzaSyDE0Jdam9XmimEqLM633MYF71Ylie7I-H8',
+    appId: '1:973890908256:web:ce3386c5c9f5bc74545305',
+    messagingSenderId: '973890908256',
+    projectId: 'cinematy-app',
+    authDomain: 'cinematy-app.firebaseapp.com',
+    databaseURL: 'https://cinematy-app-default-rtdb.europe-west1.firebasedatabase.app',
+    storageBucket: 'cinematy-app.firebasestorage.app',
   );
 }

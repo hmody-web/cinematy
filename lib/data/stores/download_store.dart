@@ -43,6 +43,11 @@ class DownloadStore extends ChangeNotifier {
 
   Future<void> load() async {
     if (_loaded) return;
+    if (kIsWeb) {
+      _loaded = true;
+      notifyListeners();
+      return;
+    }
     final p = await SharedPreferences.getInstance();
     try {
       final encoded = p.getString(_key) ??
@@ -78,6 +83,9 @@ class DownloadStore extends ChangeNotifier {
     VideoSource source, {
     List<SubtitleSource> subtitles = const <SubtitleSource>[],
   }) async {
+    if (kIsWeb) {
+      throw UnsupportedError('Downloads are not available in the web TV preview.');
+    }
     if (media.id.isEmpty ||
         source.url.isEmpty ||
         _active.containsKey(media.id) ||
@@ -209,6 +217,11 @@ class DownloadStore extends ChangeNotifier {
   }
 
   Future<void> remove(String id) async {
+    if (kIsWeb) {
+      _items.remove(id);
+      notifyListeners();
+      return;
+    }
     final item = _items.remove(id);
     if (item != null) {
       try {

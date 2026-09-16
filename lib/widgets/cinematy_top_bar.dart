@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../features/auth/auth_service.dart';
@@ -13,6 +14,7 @@ import '../features/watch_party/watch_party_service.dart';
 import '../data/models/friend_request.dart';
 import '../data/services/cinematy_account_api.dart';
 import '../core/navigation/cinematy_page_route.dart';
+import '../core/utils/display_text.dart';
 
 import '../core/theme/app_theme.dart';
 import 'app_notice.dart';
@@ -41,12 +43,12 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
   final double brandOpacity;
 
   @override
-  Size get preferredSize => const Size.fromHeight(74);
+  Size get preferredSize => Size.fromHeight(kIsWeb ? 92 : 74);
 
   @override
   Widget build(BuildContext context) => AppBar(
         automaticallyImplyLeading: false,
-        toolbarHeight: 74,
+        toolbarHeight: kIsWeb ? 92 : 74,
         elevation: 0,
         scrolledUnderElevation: 0,
         backgroundColor: Colors.transparent,
@@ -62,7 +64,7 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
             ),
           ),
         ),
-        titleSpacing: 16,
+        titleSpacing: kIsWeb ? 28 : 16,
         title: CinematyTopBarContent(
           section: section,
           onContinue: onContinue,
@@ -130,7 +132,7 @@ class CinematyTopBarContent extends StatelessWidget {
                 children: [
                   _BrandGlass(
                     progress: brandGlassProgress.clamp(0.0, 1.0),
-                    child: const BrandLogo(size: 38),
+                    child: BrandLogo(size: kIsWeb ? 48 : 38),
                   ),
                   if (section != null && section!.trim().isNotEmpty) ...[
                     const SizedBox(width: 10),
@@ -142,10 +144,11 @@ class CinematyTopBarContent extends StatelessWidget {
                         border: Border.all(color: Colors.white.withOpacity(.06)),
                       ),
                       child: Text(
-                        section!,
+                        cinematyDisplayTitle(section!),
+                        textDirection: TextDirection.rtl,
                         style: TextStyle(
                           color: Colors.white.withOpacity(.72),
-                          fontSize: 10.5,
+                          fontSize: kIsWeb ? 14 : 10.5,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
@@ -184,6 +187,7 @@ class _AccountQuickActionState extends State<_AccountQuickAction> {
   int _friendCount = 0;
   int _partyCount = 0;
   bool _refreshingFriendCount = false;
+  bool _focused = false;
 
   int get _notificationCount => _friendCount + _partyCount;
 
@@ -345,44 +349,66 @@ class _AccountQuickActionState extends State<_AccountQuickAction> {
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              ClipRRect(
-                key: _anchorKey,
-                borderRadius: BorderRadius.circular(16),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                  child: Material(
-                    color: Colors.white.withOpacity(.055),
-                    child: InkWell(
-                      onTap: () => _openPopover(user),
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        padding: EdgeInsets.all(user == null ? 0 : 4),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: badge > 0
-                                ? AppColors.redBright.withOpacity(.7)
-                                : user == null
-                                    ? Colors.white.withOpacity(.07)
-                                    : AppColors.redBright.withOpacity(.22),
+              AnimatedScale(
+                scale: kIsWeb && _focused ? 1.12 : 1.0,
+                duration: const Duration(milliseconds: 130),
+                curve: Curves.easeOutCubic,
+                child: ClipRRect(
+                  key: _anchorKey,
+                  borderRadius: BorderRadius.circular(16),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                    child: Material(
+                      color: Colors.white.withOpacity(.055),
+                      child: InkWell(
+                        autofocus: kIsWeb,
+                        focusColor: Colors.transparent,
+                        onFocusChange: (value) {
+                          if (_focused == value) return;
+                          setState(() => _focused = value);
+                        },
+                        onTap: () => _openPopover(user),
+                        child: Container(
+                          width: 44,
+                          height: 44,
+                          padding: EdgeInsets.all(user == null ? 0 : 4),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              width: kIsWeb && _focused ? 2 : 1,
+                              color: kIsWeb && _focused
+                                  ? Colors.white
+                                  : badge > 0
+                                      ? AppColors.redBright.withOpacity(.7)
+                                      : user == null
+                                          ? Colors.white.withOpacity(.07)
+                                          : AppColors.redBright.withOpacity(.22),
+                            ),
+                            boxShadow: kIsWeb && _focused
+                                ? [
+                                    BoxShadow(
+                                      color: AppColors.redBright.withOpacity(.38),
+                                      blurRadius: 16,
+                                    ),
+                                  ]
+                                : null,
                           ),
+                          child: user == null
+                              ? const Icon(Icons.person_outline_rounded, size: 22)
+                              : ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: photo?.isNotEmpty == true
+                                      ? Image.network(
+                                          photo!,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, __, ___) => const Icon(
+                                            Icons.person_rounded,
+                                            size: 22,
+                                          ),
+                                        )
+                                      : const Icon(Icons.person_rounded, size: 22),
+                                ),
                         ),
-                        child: user == null
-                            ? const Icon(Icons.person_outline_rounded, size: 22)
-                            : ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: photo?.isNotEmpty == true
-                                    ? Image.network(
-                                        photo!,
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) => const Icon(
-                                          Icons.person_rounded,
-                                          size: 22,
-                                        ),
-                                      )
-                                    : const Icon(Icons.person_rounded, size: 22),
-                              ),
                       ),
                     ),
                   ),
@@ -1290,7 +1316,7 @@ class _BrandGlass extends StatelessWidget {
   }
 }
 
-class _TopAction extends StatelessWidget {
+class _TopAction extends StatefulWidget {
   const _TopAction({
     required this.icon,
     required this.tooltip,
@@ -1304,8 +1330,21 @@ class _TopAction extends StatelessWidget {
   final int badge;
 
   @override
-  Widget build(BuildContext context) => Tooltip(
-        message: tooltip,
+  State<_TopAction> createState() => _TopActionState();
+}
+
+class _TopActionState extends State<_TopAction> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tvFocused = kIsWeb && _focused;
+    return Tooltip(
+      message: widget.tooltip,
+      child: AnimatedScale(
+        scale: tvFocused ? 1.12 : 1.0,
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeOutCubic,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(16),
           child: BackdropFilter(
@@ -1313,24 +1352,45 @@ class _TopAction extends StatelessWidget {
             child: Material(
               color: Colors.white.withOpacity(.055),
               child: InkWell(
-                onTap: onTap,
+                focusColor: Colors.transparent,
+                onFocusChange: (value) {
+                  if (_focused == value) return;
+                  setState(() => _focused = value);
+                },
+                onTap: widget.onTap,
                 child: Container(
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white.withOpacity(.07)),
+                    border: Border.all(
+                      color: tvFocused
+                          ? Colors.white
+                          : Colors.white.withOpacity(.07),
+                      width: tvFocused ? 2 : 1,
+                    ),
+                    boxShadow: tvFocused
+                        ? [
+                            BoxShadow(
+                              color: AppColors.redBright.withOpacity(.36),
+                              blurRadius: 16,
+                            ),
+                          ]
+                        : null,
                   ),
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      Center(child: Icon(icon, size: 22)),
-                      if (badge > 0)
+                      Center(child: Icon(widget.icon, size: 22)),
+                      if (widget.badge > 0)
                         Positioned(
                           right: 4,
                           top: 4,
                           child: Container(
-                            constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                            constraints: const BoxConstraints(
+                              minWidth: 16,
+                              minHeight: 16,
+                            ),
                             padding: const EdgeInsets.symmetric(horizontal: 4),
                             alignment: Alignment.center,
                             decoration: const BoxDecoration(
@@ -1338,8 +1398,11 @@ class _TopAction extends StatelessWidget {
                               shape: BoxShape.circle,
                             ),
                             child: Text(
-                              badge > 99 ? '99+' : '$badge',
-                              style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w900),
+                              widget.badge > 99 ? '99+' : '${widget.badge}',
+                              style: const TextStyle(
+                                fontSize: 8,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
                           ),
                         ),
@@ -1350,5 +1413,8 @@ class _TopAction extends StatelessWidget {
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
+

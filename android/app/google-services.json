@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "973890908256",
+    "firebase_url": "https://cinematy-app-default-rtdb.europe-west1.firebasedatabase.app",
     "project_id": "cinematy-app",
     "storage_bucket": "cinematy-app.firebasestorage.app"
   },

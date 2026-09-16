@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -38,7 +39,6 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
 
   StreamSubscription<bool>? _bufferingSub;
   StreamSubscription<bool>? _playingSub;
-  StreamSubscription<String>? _errorSub;
   StreamSubscription<bool>? _pipSub;
 
   late TvChannel _current;
@@ -48,11 +48,13 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
   bool _showControls = true;
   bool _showRail = false;
   Timer? _controlsTimer;
+  Timer? _playbackGuardTimer;
   bool _searching = false;
   String _query = '';
-  String? _error;
+  bool _userPaused = false;
+  bool _openingStream = false;
 
-  bool get _isIOS => Platform.isIOS;
+  bool get _isIOS => !kIsWeb && Platform.isIOS;
   String get _streamUrl => widget.service.streamUrl(_current);
 
   Future<void> _enterTrueFullscreen() async {
@@ -74,20 +76,30 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
     _current = widget.channel;
 
     if (!_isIOS) {
-      final player = Player();
+      final player = Player(
+        configuration: const PlayerConfiguration(
+          bufferSize: 64 * 1024 * 1024,
+        ),
+      );
       _player = player;
-      _videoController = VideoController(player);
+      _videoController = VideoController(
+        player,
+        configuration: const VideoControllerConfiguration(
+          hwdec: 'auto-safe',
+          enableHardwareAcceleration: true,
+          androidAttachSurfaceAfterVideoParameters: true,
+        ),
+      );
       _bufferingSub = player.stream.buffering.listen((value) {
         if (mounted) setState(() => _buffering = value);
       });
       _playingSub = player.stream.playing.listen((value) {
         if (mounted) setState(() => _playing = value);
-      });
-      _errorSub = player.stream.error.listen((value) {
-        if (value.trim().isNotEmpty && mounted) {
-          setState(() => _error = value);
+        if (!value && !_userPaused && !_openingStream) {
+          unawaited(_keepLivePlaying());
         }
       });
+      _startPlaybackGuard();
       _openCurrent();
     } else {
       _buffering = false;
@@ -112,6 +124,30 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
     });
 
     _scheduleControlsHide();
+  }
+
+  void _startPlaybackGuard() {
+    _playbackGuardTimer?.cancel();
+    _playbackGuardTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted || _isIOS || _userPaused || _openingStream) return;
+      final player = _player;
+      if (player == null) return;
+      if (!player.state.playing) {
+        unawaited(_keepLivePlaying());
+      }
+    });
+  }
+
+  Future<void> _keepLivePlaying() async {
+    if (!mounted || _isIOS || _userPaused || _openingStream) return;
+    final player = _player;
+    if (player == null || player.state.playing) return;
+    try {
+      await player.play();
+    } catch (_) {
+      // Keep the current stream/session untouched. The guard will retry play
+      // without reopening or refreshing the channel.
+    }
   }
 
   void _scheduleControlsHide() {
@@ -170,6 +206,8 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
   }
 
   Future<void> _openCurrent() async {
+    _userPaused = false;
+    _openingStream = true;
     if (_isIOS) {
       if (_iosController.isAttached) {
         await _iosController.open(_streamUrl);
@@ -178,20 +216,21 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
         setState(() {
           _playing = true;
           _buffering = false;
-          _error = null;
         });
       }
+      _openingStream = false;
       return;
     }
 
     try {
       setState(() {
         _buffering = true;
-        _error = null;
       });
       await _player!.open(Media(_streamUrl), play: true);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _buffering = false);
+    } finally {
+      _openingStream = false;
     }
   }
 
@@ -200,7 +239,6 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
     setState(() {
       _current = channel;
       _buffering = true;
-      _error = null;
       _showRail = false;
       _searching = false;
       _query = '';
@@ -213,14 +251,25 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
   Future<void> _togglePlay() async {
     if (_isIOS) {
       if (_playing) {
+        _userPaused = true;
         await _iosController.pause();
       } else {
+        _userPaused = false;
         await _iosController.play();
       }
       if (mounted) setState(() => _playing = !_playing);
       return;
     }
-    await _player?.playOrPause();
+
+    final player = _player;
+    if (player == null) return;
+    if (player.state.playing) {
+      _userPaused = true;
+      await player.pause();
+    } else {
+      _userPaused = false;
+      await player.play();
+    }
   }
 
   Future<void> _enterPip() async {
@@ -246,9 +295,9 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
     if (_isIOS) _iosController.stopPip();
     _bufferingSub?.cancel();
     _playingSub?.cancel();
-    _errorSub?.cancel();
     _pipSub?.cancel();
     _controlsTimer?.cancel();
+    _playbackGuardTimer?.cancel();
     _searchController.dispose();
     _player?.dispose();
     unawaited(_restoreSystemUi());
@@ -362,18 +411,6 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
                         onSelect: (channel) {
                           _markInteraction();
                           _switchChannel(channel);
-                        },
-                      ),
-                    ),
-                  if (_error != null)
-                    Positioned(
-                      left: 18,
-                      bottom: 80 + MediaQuery.paddingOf(context).bottom,
-                      right: _showRail ? railWidth + 18 : 18,
-                      child: _ErrorToast(
-                        onRetry: () {
-                          _markInteraction();
-                          _openCurrent();
                         },
                       ),
                     ),
@@ -685,36 +722,6 @@ class _ChannelRail extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _ErrorToast extends StatelessWidget {
-  const _ErrorToast({required this.onRetry});
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(13, 10, 10, 10),
-      decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(.94),
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: Colors.white.withOpacity(.07)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.error_outline_rounded, size: 19, color: AppColors.redBright),
-          const SizedBox(width: 8),
-          const Expanded(
-            child: Text(
-              'تعذر تشغيل هذه القناة.',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
-            ),
-          ),
-          TextButton(onPressed: onRetry, child: const Text('إعادة')),
-        ],
       ),
     );
   }

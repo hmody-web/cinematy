@@ -1,4 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import '../core/utils/display_text.dart';
 
 class SectionHeader extends StatelessWidget {
   const SectionHeader({super.key, required this.title, this.subtitle, this.onMore});
@@ -9,7 +12,7 @@ class SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 22, 18, 12),
+      padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 34 : 22, kIsWeb ? 30 : 18, kIsWeb ? 18 : 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -17,10 +20,10 @@ class SectionHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontSize: 19)),
+                Text(cinematyDisplayTitle(title), textDirection: TextDirection.rtl, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontSize: kIsWeb ? 32 : 19)),
                 if (subtitle != null) ...[
                   const SizedBox(height: 3),
-                  Text(subtitle!, style: TextStyle(color: Colors.white.withOpacity(.42), fontSize: 12)),
+                  Text(subtitle!, style: TextStyle(color: Colors.white.withOpacity(.42), fontSize: kIsWeb ? 17 : 12)),
                 ],
               ],
             ),

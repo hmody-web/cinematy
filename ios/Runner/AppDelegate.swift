@@ -208,7 +208,7 @@ private final class CinematyTvPlayerView: NSObject, FlutterPlatformView, AVPictu
     item.add(output)
     videoOutput = output
 
-    item.preferredForwardBufferDuration = 2.0
+    item.preferredForwardBufferDuration = 6.0
     item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
     return item
   }

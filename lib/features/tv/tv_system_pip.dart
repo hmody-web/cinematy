@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class TvSystemPip {
@@ -16,7 +17,7 @@ class TvSystemPip {
   }
 
   static void _install() {
-    if (_installed || !Platform.isAndroid) return;
+    if (_installed || kIsWeb || !Platform.isAndroid) return;
     _installed = true;
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'pipChanged') {
@@ -26,7 +27,7 @@ class TvSystemPip {
   }
 
   static Future<void> setActive(bool active) async {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     _install();
     try {
       await _channel.invokeMethod<void>('setActive', active);
@@ -34,7 +35,7 @@ class TvSystemPip {
   }
 
   static Future<void> enter() async {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     _install();
     try {
       await _channel.invokeMethod<void>('enter');

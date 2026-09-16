@@ -63,3 +63,6 @@ flutter_launcher_icons:
   remove_alpha_ios: true
   adaptive_icon_background: "#070505"
   adaptive_icon_foreground: assets/branding/app_icon.jpg
+
+dependency_overrides:
+  firebase_core_web: 3.10.0

@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:cinematy/core/navigation/cinematy_page_route.dart';
+import '../../core/utils/display_text.dart';
 import '../../data/models/media_item.dart';
 import '../../providers.dart';
 import '../../widgets/cinematy_top_bar.dart';
@@ -109,7 +111,7 @@ class _SectionBrowseScreenState extends ConsumerState<SectionBrowseScreen> {
     final downloads = ref.watch(downloadProvider);
     return Scaffold(
       appBar: CinematyTopBar(
-        section: widget.title,
+        section: cinematyDisplayTitle(widget.title),
         downloadsCount: downloads.items.length + downloads.activeItems.length,
         onBack: () => Navigator.pop(context),
         onContinue: () => Navigator.push(context, CinematyPageRoute(builder: (_) => const ContinueWatchingScreen())),
@@ -128,12 +130,19 @@ class _SectionBrowseScreenState extends ConsumerState<SectionBrowseScreen> {
                   padding: const EdgeInsets.fromLTRB(18, 12, 18, 40),
                   cacheExtent: 1000,
                   itemCount: _items.length + (_loading ? 3 : 0),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 16,
-                    childAspectRatio: .52,
-                  ),
+                  gridDelegate: kIsWeb
+                      ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 300,
+                          crossAxisSpacing: 22,
+                          mainAxisSpacing: 26,
+                          childAspectRatio: .54,
+                        )
+                      : const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 16,
+                          childAspectRatio: .52,
+                        ),
                   itemBuilder: (_, i) {
                     if (i >= _items.length) return const SkeletonPosterCard(width: double.infinity);
                     final item = _items[i];
@@ -154,12 +163,19 @@ class _SectionSkeleton extends StatelessWidget {
   Widget build(BuildContext context) => GridView.builder(
         padding: const EdgeInsets.fromLTRB(18, 12, 18, 40),
         itemCount: 12,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 16,
-          childAspectRatio: .52,
-        ),
+        gridDelegate: kIsWeb
+            ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 300,
+                crossAxisSpacing: 22,
+                mainAxisSpacing: 26,
+                childAspectRatio: .54,
+              )
+            : const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 16,
+                childAspectRatio: .52,
+              ),
         itemBuilder: (_, __) => const SkeletonPosterCard(width: double.infinity),
       );
 }

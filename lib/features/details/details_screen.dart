@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,6 +33,9 @@ class DetailsScreen extends ConsumerStatefulWidget {
 }
 
 class _DetailsScreenState extends ConsumerState<DetailsScreen> {
+  late final MediaItem _entryItem;
+  late final int? _resumeSeason;
+  late final int? _resumeEpisode;
   late Future<ContentDetails> _details;
   Future<List<SeasonGroup>>? _seasons;
   Future<List<MediaItem>>? _recommendations;
@@ -40,25 +44,40 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
   @override
   void initState() {
     super.initState();
+    _entryItem = widget.item.seriesRootForResume;
+    final resumingEpisode = _entryItem.id != widget.item.id;
+    _resumeSeason = resumingEpisode ? widget.item.season : null;
+    _resumeEpisode = resumingEpisode ? widget.item.episode : null;
+
     final api = ref.read(apiProvider);
-    _details = api.details(widget.item.id);
-    _recommendations = api.recommendations(widget.item.id).catchError((_) => <MediaItem>[]);
+    _details = api.details(_entryItem.id);
+    _recommendations = api.recommendations(_entryItem.id).catchError((_) => <MediaItem>[]);
     _prepareSeasons();
   }
 
   Future<void> _prepareSeasons() async {
-    if (!widget.item.isSeries) return;
+    if (!_entryItem.isSeries) return;
     final api = ref.read(apiProvider);
     _seasons = () async {
       try {
         final details = await _details;
-        return api.seasonsFor(details.media.id.isNotEmpty ? details.media : widget.item, detailsRaw: details.media.raw);
+        return api.seasonsFor(details.media.id.isNotEmpty ? details.media : _entryItem, detailsRaw: details.media.raw);
       } catch (_) {
-        return api.seasonsFor(widget.item);
+        return api.seasonsFor(_entryItem);
       }
     }();
     if (mounted) setState(() {});
   }
+
+  bool get _hasEpisodeResume =>
+      _resumeSeason != null && _resumeEpisode != null && widget.item.id != _entryItem.id;
+
+  MediaItem _primaryPlayTarget(MediaItem media) =>
+      _hasEpisodeResume ? widget.item : media;
+
+  String get _primaryPlayLabel => _hasEpisodeResume
+      ? 'متابعة • الموسم $_resumeSeason • الحلقة $_resumeEpisode'
+      : 'مشاهدة';
 
   @override
   Widget build(BuildContext context) {
@@ -71,7 +90,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
         future: _details,
         builder: (context, snapshot) {
           final details = snapshot.data;
-          final media = details?.media.id.isNotEmpty == true ? details!.media : widget.item;
+          final media = details?.media.id.isNotEmpty == true ? details!.media : _entryItem;
           final watchLater = library.isWatchLater(media.id);
           final favorite = library.isFavorite(media.id);
           final downloaded = downloads.isDownloaded(media.id);
@@ -82,11 +101,60 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
           // back to thumbnails if no full image exists.
           final backdrop = media.backdropUrl.isNotEmpty
               ? media.backdropUrl
-              : widget.item.backdropUrl.isNotEmpty
-                  ? widget.item.backdropUrl
+              : _entryItem.backdropUrl.isNotEmpty
+                  ? _entryItem.backdropUrl
                   : media.posterUrl.isNotEmpty
                       ? media.posterUrl
-                      : widget.item.posterUrl;
+                      : _entryItem.posterUrl;
+
+          if (kIsWeb) {
+            return _TvDetailsView(
+              media: media,
+              details: details,
+              backdrop: backdrop,
+              seasons: _seasons,
+              recommendations: _recommendations,
+              watchLater: watchLater,
+              favorite: favorite,
+              downloaded: downloaded,
+              downloading: downloading,
+              downloadProgress: downloadProgress,
+              onBack: () => Navigator.maybePop(context),
+              playLabel: _primaryPlayLabel,
+              onPlay: () => _play(_primaryPlayTarget(media)),
+              onWatchParty: () => _startWatchParty(media),
+              onDownload: downloading || downloaded ? null : () => _showDownloadQuality(media),
+              onWatchLater: () {
+                ref.read(libraryProvider).toggleWatchLater(media);
+                AppNotice.show(
+                  context,
+                  title: watchLater ? 'تمت الإزالة من المشاهدة لاحقاً' : 'تمت الإضافة للمشاهدة لاحقاً',
+                  type: AppNoticeType.success,
+                );
+              },
+              onFavorite: () {
+                ref.read(libraryProvider).toggleFavorite(media);
+                AppNotice.show(
+                  context,
+                  title: favorite ? 'تمت الإزالة من المحفوظات' : 'تم الحفظ في المفضلة',
+                  type: AppNoticeType.success,
+                );
+              },
+              onPlayEpisode: (episode) => _play(media, episode: episode),
+              onWatchPartyEpisode: (episode) =>
+                  _startWatchParty(_episodeMedia(media, episode)),
+              onDownloadEpisode: (episode) => _downloadEpisode(media, episode),
+              onDownloadSeason: (episodes) => _downloadSeason(media, episodes),
+              initialSeason: _resumeSeason,
+              initialEpisode: _resumeEpisode,
+              onOpenActor: (person) => Navigator.of(context).push(
+                CinematyPageRoute(builder: (_) => ActorScreen(person: person)),
+              ),
+              onOpenRecommendation: (item) => Navigator.of(context).push(
+                CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
+              ),
+            );
+          }
 
           return CustomScrollView(
             physics: const BouncingScrollPhysics(),
@@ -102,7 +170,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                   downloading: downloading,
                   downloadProgress: downloadProgress,
                   onBack: () => Navigator.pop(context),
-                  onPlay: () => _play(media),
+                  playLabel: _primaryPlayLabel,
+                  onPlay: () => _play(_primaryPlayTarget(media)),
                   onWatchParty: () => _startWatchParty(media),
                   onDownload: downloading || downloaded ? null : () => _showDownloadQuality(media),
                   onWatchLater: () {
@@ -127,14 +196,14 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                 const SliverToBoxAdapter(child: SectionHeader(title: 'القصة')),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 18),
-                    child: Text(media.description, style: TextStyle(color: Colors.white.withOpacity(.74), height: 1.72, fontSize: 14.5)),
+                    padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 36 : 18),
+                    child: Text(media.description, style: TextStyle(color: Colors.white.withOpacity(.74), height: 1.72, fontSize: kIsWeb ? 18 : 14.5)),
                   ),
                 ),
               ],
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 4),
+                  padding: EdgeInsets.fromLTRB(kIsWeb ? 36 : 18, kIsWeb ? 28 : 18, kIsWeb ? 36 : 18, 4),
                   child: InkWell(
                     onTap: () => setState(() => _moreInfo = !_moreInfo),
                     borderRadius: BorderRadius.circular(18),
@@ -164,6 +233,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                         _startWatchParty(_episodeMedia(media, episode)),
                     onDownloadEpisode: (episode) => _downloadEpisode(media, episode),
                     onDownloadSeason: (episodes) => _downloadSeason(media, episodes),
+                    initialSeason: _resumeSeason,
+                    initialEpisode: _resumeEpisode,
                   ),
                 ),
               ],
@@ -185,14 +256,15 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                       final items = snap.data ?? const <MediaItem>[];
                       if (items.isEmpty) return const SizedBox(height: 20);
                       return SizedBox(
-                        height: 270,
+                        height: kIsWeb ? 350 : 270,
                         child: ListView.separated(
-                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 30 : 18),
                           scrollDirection: Axis.horizontal,
                           itemCount: items.take(16).length,
-                          separatorBuilder: (_, __) => const SizedBox(width: 12),
+                          separatorBuilder: (_, __) => SizedBox(width: kIsWeb ? 18 : 12),
                           itemBuilder: (_, i) => MediaPosterCard(
                             item: items[i],
+                            width: kIsWeb ? 188 : 142,
                             onTap: () => Navigator.of(context).push(CinematyPageRoute(builder: (_) => DetailsScreen(item: items[i]))),
                           ),
                         ),
@@ -354,12 +426,944 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
         isSeries: true,
         season: episode.seasonNumber,
         episode: episode.episodeNumber,
-        raw: {...series.raw, ...episode.raw, '_seriesTitle': series.title},
+        raw: {
+          ...series.raw,
+          ...episode.raw,
+          'rootSeries': series.id,
+          'rootSeriesNb': series.id,
+          '_seriesId': series.id,
+          '_seriesTitle': series.title,
+          '_seriesDescription': series.description,
+          '_seriesPoster': series.posterUrl,
+          '_seriesBackdrop': series.backdropUrl,
+          '_seriesYear': series.year,
+          '_seriesRating': series.rating,
+        },
       );
 
   void _play(MediaItem media, {Episode? episode}) {
     final target = episode == null ? media : _episodeMedia(media, episode);
     Navigator.of(context).push(CinematyPageRoute(builder: (_) => PlayerScreen(media: target)));
+  }
+}
+
+
+class _TvDetailsView extends StatelessWidget {
+  const _TvDetailsView({
+    required this.media,
+    required this.details,
+    required this.backdrop,
+    required this.seasons,
+    required this.recommendations,
+    required this.watchLater,
+    required this.favorite,
+    required this.downloaded,
+    required this.downloading,
+    required this.downloadProgress,
+    required this.onBack,
+    required this.playLabel,
+    required this.onPlay,
+    required this.onWatchParty,
+    required this.onDownload,
+    required this.onWatchLater,
+    required this.onFavorite,
+    required this.onPlayEpisode,
+    required this.onWatchPartyEpisode,
+    required this.onDownloadEpisode,
+    required this.onDownloadSeason,
+    required this.initialSeason,
+    required this.initialEpisode,
+    required this.onOpenActor,
+    required this.onOpenRecommendation,
+  });
+
+  final MediaItem media;
+  final ContentDetails? details;
+  final String backdrop;
+  final Future<List<SeasonGroup>>? seasons;
+  final Future<List<MediaItem>>? recommendations;
+  final bool watchLater, favorite, downloaded, downloading;
+  final double downloadProgress;
+  final String playLabel;
+  final VoidCallback onBack, onPlay, onWatchParty, onWatchLater, onFavorite;
+  final VoidCallback? onDownload;
+  final ValueChanged<Episode> onPlayEpisode;
+  final ValueChanged<Episode> onWatchPartyEpisode;
+  final ValueChanged<Episode> onDownloadEpisode;
+  final ValueChanged<List<Episode>> onDownloadSeason;
+  final int? initialSeason;
+  final int? initialEpisode;
+  final ValueChanged<Person> onOpenActor;
+  final ValueChanged<MediaItem> onOpenRecommendation;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final poster = media.posterUrl.isNotEmpty ? media.posterUrl : backdrop;
+    final genres = details?.genres ?? const <String>[];
+
+    return FocusTraversalGroup(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: AppColors.background),
+          if (backdrop.isNotEmpty)
+            Positioned.fill(
+              child: Opacity(
+                opacity: .30,
+                child: CinematyNetworkImage(
+                  url: backdrop,
+                  memCacheWidth: 2400,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+          const Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  stops: [0, .42, 1],
+                  colors: [Color(0xA0070505), Color(0xE8070505), AppColors.background],
+                ),
+              ),
+            ),
+          ),
+          SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(38, 26, 38, 70),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    _TvRoundIconButton(
+                      icon: Icons.arrow_forward_ios_rounded,
+                      tooltip: 'رجوع',
+                      onTap: onBack,
+                    ),
+                    const Spacer(),
+                    Text(
+                      media.isSeries ? 'تفاصيل المسلسل' : 'تفاصيل الفيلم',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(.48),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: size.height.clamp(680.0, 860.0).toDouble(),
+                  child: Row(
+                    textDirection: TextDirection.rtl,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(
+                        width: (size.width * .30).clamp(390.0, 520.0).toDouble(),
+                        child: _TvPosterHero(
+                          media: media,
+                          poster: poster,
+                          watchLater: watchLater,
+                          favorite: favorite,
+                          downloaded: downloaded,
+                          downloading: downloading,
+                          downloadProgress: downloadProgress,
+                          playLabel: playLabel,
+                          onPlay: onPlay,
+                          onWatchParty: onWatchParty,
+                          onDownload: onDownload,
+                          onWatchLater: onWatchLater,
+                          onFavorite: onFavorite,
+                        ),
+                      ),
+                      const SizedBox(width: 34),
+                      Expanded(
+                        child: _TvInfoPanel(
+                          media: media,
+                          details: details,
+                          genres: genres,
+                          onOpenActor: onOpenActor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (media.isSeries && seasons != null) ...[
+                  const SizedBox(height: 38),
+                  const _TvSectionTitle(
+                    title: 'المواسم والحلقات',
+                    subtitle: 'تنقّل بالريموت واختر الحلقة مباشرة',
+                  ),
+                  const SizedBox(height: 16),
+                  _TvSeasonsPanel(
+                    future: seasons!,
+                    media: media,
+                    onPlay: onPlayEpisode,
+                    onWatchPartyEpisode: onWatchPartyEpisode,
+                    onDownloadEpisode: onDownloadEpisode,
+                    onDownloadSeason: onDownloadSeason,
+                    initialSeason: initialSeason,
+                    initialEpisode: initialEpisode,
+                  ),
+                ],
+                if (recommendations != null) ...[
+                  const SizedBox(height: 42),
+                  const _TvSectionTitle(title: 'قد يعجبك أيضاً'),
+                  const SizedBox(height: 16),
+                  FutureBuilder<List<MediaItem>>(
+                    future: recommendations,
+                    builder: (_, snap) {
+                      final items = snap.data ?? const <MediaItem>[];
+                      if (items.isEmpty) return const SizedBox.shrink();
+                      return SizedBox(
+                        height: 420,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: items.take(16).length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 20),
+                          itemBuilder: (_, i) => MediaPosterCard(
+                            item: items[i],
+                            width: 228,
+                            onTap: () => onOpenRecommendation(items[i]),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TvPosterHero extends StatelessWidget {
+  const _TvPosterHero({
+    required this.media,
+    required this.poster,
+    required this.watchLater,
+    required this.favorite,
+    required this.downloaded,
+    required this.downloading,
+    required this.downloadProgress,
+    required this.playLabel,
+    required this.onPlay,
+    required this.onWatchParty,
+    required this.onDownload,
+    required this.onWatchLater,
+    required this.onFavorite,
+  });
+
+  final MediaItem media;
+  final String poster;
+  final bool watchLater, favorite, downloaded, downloading;
+  final double downloadProgress;
+  final String playLabel;
+  final VoidCallback onPlay, onWatchParty, onWatchLater, onFavorite;
+  final VoidCallback? onDownload;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(32),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xFF111111)),
+          CinematyNetworkImage(
+            url: poster,
+            memCacheWidth: 1100,
+            fit: BoxFit.cover,
+          ),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                stops: [.30, .64, 1],
+                colors: [Colors.transparent, Color(0x58000000), Color(0xF2070505)],
+              ),
+            ),
+          ),
+          Positioned(
+            left: 22,
+            right: 22,
+            bottom: 22,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ImdbBadge(item: media),
+                const SizedBox(height: 12),
+                Text(
+                  media.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 31,
+                    height: 1.05,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                if (media.description.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    media.description,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(.72),
+                      fontSize: 14.5,
+                      height: 1.55,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                _TvPrimaryButton(
+                  autofocus: true,
+                  icon: Icons.play_arrow_rounded,
+                  label: playLabel,
+                  onTap: onPlay,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _TvActionButton(
+                        icon: Icons.groups_2_rounded,
+                        label: 'جماعية',
+                        onTap: onWatchParty,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _TvActionButton(
+                        icon: downloaded ? Icons.download_done_rounded : Icons.download_rounded,
+                        label: downloaded
+                            ? 'تم التنزيل'
+                            : downloading
+                                ? '${(downloadProgress * 100).round()}٪'
+                                : 'تنزيل',
+                        onTap: onDownload,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _TvActionButton(
+                        icon: watchLater ? Icons.watch_later_rounded : Icons.watch_later_outlined,
+                        label: watchLater ? 'محفوظ' : 'لاحقاً',
+                        onTap: onWatchLater,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _TvActionButton(
+                        icon: favorite ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                        label: favorite ? 'بالمفضلة' : 'مفضلة',
+                        onTap: onFavorite,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TvInfoPanel extends StatelessWidget {
+  const _TvInfoPanel({
+    required this.media,
+    required this.details,
+    required this.genres,
+    required this.onOpenActor,
+  });
+
+  final MediaItem media;
+  final ContentDetails? details;
+  final List<String> genres;
+  final ValueChanged<Person> onOpenActor;
+
+  @override
+  Widget build(BuildContext context) {
+    final cast = details?.cast ?? const <Person>[];
+    final directors = details?.directors ?? const <Person>[];
+    final writers = details?.writers ?? const <Person>[];
+
+    return Container(
+      padding: const EdgeInsets.all(30),
+      decoration: BoxDecoration(
+        color: const Color(0xD9101010),
+        borderRadius: BorderRadius.circular(32),
+        border: Border.all(color: Colors.white.withOpacity(.08)),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              media.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 43, height: 1.04, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 9,
+              runSpacing: 9,
+              children: [
+                if (media.year > 0) _MetaPill(text: '${media.year}'),
+                _MetaPill(text: media.isSeries ? 'مسلسل' : 'فيلم'),
+                ...genres.take(5).map((e) => _MetaPill(text: e)),
+                if ((details?.language ?? '').isNotEmpty)
+                  _MetaPill(text: details!.language),
+                if ((details?.parentalRating ?? '').isNotEmpty)
+                  _MetaPill(text: details!.parentalRating),
+              ],
+            ),
+            if (media.description.isNotEmpty) ...[
+              const SizedBox(height: 24),
+              Text(
+                media.description,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(.72),
+                  fontSize: 18,
+                  height: 1.75,
+                ),
+              ),
+            ],
+            if (directors.isNotEmpty || writers.isNotEmpty) ...[
+              const SizedBox(height: 28),
+              Wrap(
+                spacing: 24,
+                runSpacing: 12,
+                children: [
+                  if (directors.isNotEmpty)
+                    _TvCreditLine(label: 'الإخراج', value: directors.map((e) => e.name).join('، ')),
+                  if (writers.isNotEmpty)
+                    _TvCreditLine(label: 'الكتابة', value: writers.map((e) => e.name).join('، ')),
+                ],
+              ),
+            ],
+            if (cast.isNotEmpty) ...[
+              const SizedBox(height: 30),
+              const _TvSectionTitle(title: 'طاقم العمل'),
+              const SizedBox(height: 14),
+              SizedBox(
+                height: 150,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: cast.take(16).length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 14),
+                  itemBuilder: (_, i) => _TvCastCard(
+                    person: cast[i],
+                    onTap: () => onOpenActor(cast[i]),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TvCreditLine extends StatelessWidget {
+  const _TvCreditLine({required this.label, required this.value});
+  final String label, value;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        constraints: const BoxConstraints(maxWidth: 520),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(.035),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withOpacity(.06)),
+        ),
+        child: RichText(
+          text: TextSpan(
+            style: const TextStyle(fontSize: 14.5, height: 1.4),
+            children: [
+              TextSpan(text: '$label  ', style: TextStyle(color: Colors.white.withOpacity(.42), fontWeight: FontWeight.w800)),
+              TextSpan(text: value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+            ],
+          ),
+        ),
+      );
+}
+
+class _TvCastCard extends StatefulWidget {
+  const _TvCastCard({required this.person, required this.onTap});
+  final Person person;
+  final VoidCallback onTap;
+
+  @override
+  State<_TvCastCard> createState() => _TvCastCardState();
+}
+
+class _TvCastCardState extends State<_TvCastCard> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) => AnimatedScale(
+        scale: _focused ? 1.07 : 1,
+        duration: const Duration(milliseconds: 140),
+        child: SizedBox(
+          width: 112,
+          child: InkWell(
+            onFocusChange: (v) => setState(() => _focused = v),
+            onTap: widget.onTap,
+            borderRadius: BorderRadius.circular(20),
+            child: Column(
+              children: [
+                Container(
+                  width: 96,
+                  height: 96,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: _focused ? Colors.white : Colors.white12,
+                      width: _focused ? 2.4 : 1,
+                    ),
+                    boxShadow: _focused
+                        ? [BoxShadow(color: AppColors.redBright.withOpacity(.32), blurRadius: 20)]
+                        : null,
+                  ),
+                  child: ClipOval(child: CinematyNetworkImage(url: widget.person.imageUrl)),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.person.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
+class _TvSectionTitle extends StatelessWidget {
+  const _TvSectionTitle({required this.title, this.subtitle});
+  final String title;
+  final String? subtitle;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w900)),
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Text(subtitle!, style: TextStyle(color: Colors.white.withOpacity(.43), fontSize: 14)),
+          ],
+        ],
+      );
+}
+
+class _TvPrimaryButton extends StatefulWidget {
+  const _TvPrimaryButton({required this.icon, required this.label, required this.onTap, this.autofocus = false});
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool autofocus;
+
+  @override
+  State<_TvPrimaryButton> createState() => _TvPrimaryButtonState();
+}
+
+class _TvPrimaryButtonState extends State<_TvPrimaryButton> {
+  bool _focused = false;
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode()..addListener(_handleFocus);
+  }
+
+  void _handleFocus() {
+    if (mounted) setState(() => _focused = _focusNode.hasFocus);
+  }
+
+  @override
+  void dispose() {
+    _focusNode
+      ..removeListener(_handleFocus)
+      ..dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedScale(
+        scale: _focused ? 1.035 : 1,
+        duration: const Duration(milliseconds: 130),
+        child: FilledButton.icon(
+          autofocus: widget.autofocus,
+          focusNode: _focusNode,
+          onPressed: widget.onTap,
+          style: FilledButton.styleFrom(
+            backgroundColor: _focused ? Colors.white : const Color(0xFFF1F1F1),
+            foregroundColor: AppColors.background,
+            minimumSize: const Size(double.infinity, 62),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(17)),
+            side: BorderSide(color: _focused ? AppColors.redBright : Colors.transparent, width: 3),
+          ),
+          icon: const Icon(Icons.play_arrow_rounded, size: 30),
+          label: Text(widget.label, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+        ),
+      );
+}
+
+class _TvActionButton extends StatefulWidget {
+  const _TvActionButton({required this.icon, required this.label, required this.onTap});
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  State<_TvActionButton> createState() => _TvActionButtonState();
+}
+
+class _TvActionButtonState extends State<_TvActionButton> {
+  bool _focused = false;
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode()..addListener(_handleFocus);
+  }
+
+  void _handleFocus() {
+    if (mounted) setState(() => _focused = _focusNode.hasFocus);
+  }
+
+  @override
+  void dispose() {
+    _focusNode
+      ..removeListener(_handleFocus)
+      ..dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedScale(
+        scale: _focused ? 1.045 : 1,
+        duration: const Duration(milliseconds: 130),
+        child: OutlinedButton.icon(
+          focusNode: _focusNode,
+          onPressed: widget.onTap,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.white,
+            minimumSize: const Size(0, 52),
+            backgroundColor: _focused ? Colors.white.withOpacity(.12) : Colors.black.withOpacity(.30),
+            side: BorderSide(
+              color: _focused ? Colors.white : Colors.white.withOpacity(.13),
+              width: _focused ? 2.2 : 1,
+            ),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          ),
+          icon: Icon(widget.icon, size: 19),
+          label: Text(widget.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
+        ),
+      );
+}
+
+class _TvRoundIconButton extends StatefulWidget {
+  const _TvRoundIconButton({required this.icon, required this.tooltip, required this.onTap});
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  State<_TvRoundIconButton> createState() => _TvRoundIconButtonState();
+}
+
+class _TvRoundIconButtonState extends State<_TvRoundIconButton> {
+  bool _focused = false;
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode()..addListener(_handleFocus);
+  }
+
+  void _handleFocus() {
+    if (mounted) setState(() => _focused = _focusNode.hasFocus);
+  }
+
+  @override
+  void dispose() {
+    _focusNode
+      ..removeListener(_handleFocus)
+      ..dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedScale(
+        scale: _focused ? 1.10 : 1,
+        duration: const Duration(milliseconds: 120),
+        child: IconButton.filledTonal(
+          tooltip: widget.tooltip,
+          focusNode: _focusNode,
+          onPressed: widget.onTap,
+          style: IconButton.styleFrom(
+            minimumSize: const Size(54, 54),
+            backgroundColor: _focused ? Colors.white.withOpacity(.16) : Colors.black.withOpacity(.30),
+            side: BorderSide(color: _focused ? Colors.white : Colors.white12, width: _focused ? 2.2 : 1),
+          ),
+          icon: Icon(widget.icon, size: 22),
+        ),
+      );
+}
+
+class _TvSeasonsPanel extends ConsumerStatefulWidget {
+  const _TvSeasonsPanel({
+    required this.future,
+    required this.media,
+    required this.onPlay,
+    required this.onWatchPartyEpisode,
+    required this.onDownloadEpisode,
+    required this.onDownloadSeason,
+    this.initialSeason,
+    this.initialEpisode,
+  });
+  final Future<List<SeasonGroup>> future;
+  final MediaItem media;
+  final ValueChanged<Episode> onPlay;
+  final ValueChanged<Episode> onWatchPartyEpisode;
+  final ValueChanged<Episode> onDownloadEpisode;
+  final ValueChanged<List<Episode>> onDownloadSeason;
+  final int? initialSeason;
+  final int? initialEpisode;
+
+  @override
+  ConsumerState<_TvSeasonsPanel> createState() => _TvSeasonsPanelState();
+}
+
+class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
+  int _selected = 0;
+  bool _didApplyInitial = false;
+  final ScrollController _episodeController = ScrollController();
+
+  @override
+  void dispose() {
+    _episodeController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final downloads = ref.watch(downloadProvider);
+    return FutureBuilder<List<SeasonGroup>>(
+      future: widget.future,
+      builder: (_, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const SkeletonBox(height: 300, radius: 28);
+        }
+        final seasons = snap.data ?? const <SeasonGroup>[];
+        if (seasons.isEmpty) {
+          return Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(.035), borderRadius: BorderRadius.circular(24)),
+            child: const Text('لا توجد حلقات متاحة حالياً.'),
+          );
+        }
+        if (!_didApplyInitial) {
+          _didApplyInitial = true;
+          final wantedSeason = widget.initialSeason;
+          if (wantedSeason != null) {
+            final index = seasons.indexWhere((season) => season.number == wantedSeason);
+            if (index >= 0) _selected = index;
+          }
+        }
+        if (_selected >= seasons.length) _selected = 0;
+        final current = seasons[_selected];
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: 58,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: seasons.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (_, i) => ChoiceChip(
+                  selected: i == _selected,
+                  label: Text('الموسم ${seasons[i].number}'),
+                  onSelected: (_) => setState(() => _selected = i),
+                  labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () => widget.onDownloadSeason(current.episodes),
+              icon: const Icon(Icons.download_for_offline_outlined),
+              label: Text('تنزيل الموسم ${current.number}'),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 260,
+              child: ListView.separated(
+                controller: _episodeController,
+                scrollDirection: Axis.horizontal,
+                itemCount: current.episodes.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 16),
+                itemBuilder: (_, i) {
+                  final ep = current.episodes[i];
+                  return _TvEpisodeCard(
+                    episode: ep,
+                    fallbackImage: widget.media.backdropUrl,
+                    downloaded: downloads.isDownloaded(ep.id),
+                    downloading: downloads.isDownloading(ep.id),
+                    progress: downloads.progressOf(ep.id),
+                    onPlay: () => widget.onPlay(ep),
+                    onWatchParty: () => widget.onWatchPartyEpisode(ep),
+                    onDownload: () => widget.onDownloadEpisode(ep),
+                    autofocus: false,
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _TvEpisodeCard extends StatefulWidget {
+  const _TvEpisodeCard({
+    required this.episode,
+    required this.fallbackImage,
+    required this.downloaded,
+    required this.downloading,
+    required this.progress,
+    required this.onPlay,
+    required this.onWatchParty,
+    required this.onDownload,
+    this.autofocus = false,
+  });
+  final Episode episode;
+  final String fallbackImage;
+  final bool downloaded, downloading;
+  final double progress;
+  final VoidCallback onPlay, onWatchParty, onDownload;
+  final bool autofocus;
+
+  @override
+  State<_TvEpisodeCard> createState() => _TvEpisodeCardState();
+}
+
+class _TvEpisodeCardState extends State<_TvEpisodeCard> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final image = widget.episode.posterUrl.isNotEmpty ? widget.episode.posterUrl : widget.fallbackImage;
+    return AnimatedScale(
+      scale: _focused ? 1.045 : 1,
+      duration: const Duration(milliseconds: 140),
+      child: SizedBox(
+        width: 370,
+        child: InkWell(
+          autofocus: widget.autofocus,
+          onFocusChange: (v) => setState(() => _focused = v),
+          onTap: widget.onPlay,
+          borderRadius: BorderRadius.circular(24),
+          child: Ink(
+            decoration: BoxDecoration(
+              color: const Color(0xFF111111),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: _focused ? Colors.white : Colors.white10, width: _focused ? 2.4 : 1),
+              boxShadow: _focused ? [BoxShadow(color: AppColors.redBright.withOpacity(.28), blurRadius: 24)] : null,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CinematyNetworkImage(url: image, borderRadius: const BorderRadius.vertical(top: Radius.circular(23))),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.vertical(top: Radius.circular(23)),
+                          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.transparent, Color(0xB0000000)]),
+                        ),
+                      ),
+                      Center(
+                        child: Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(color: Colors.black.withOpacity(.62), shape: BoxShape.circle, border: Border.all(color: Colors.white30)),
+                          child: const Icon(Icons.play_arrow_rounded, size: 30),
+                        ),
+                      ),
+                      Positioned(
+                        right: 12,
+                        bottom: 10,
+                        child: Text('الحلقة ${widget.episode.episodeNumber}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(widget.episode.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900)),
+                      ),
+                      if (widget.downloaded)
+                        const Icon(Icons.download_done_rounded, color: AppColors.success, size: 20)
+                      else if (widget.downloading)
+                        SizedBox(width: 20, height: 20, child: CircularProgressIndicator(value: widget.progress.clamp(0.0, 1.0).toDouble(), strokeWidth: 2))
+                      else
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          tooltip: 'تنزيل',
+                          onPressed: widget.onDownload,
+                          icon: const Icon(Icons.download_rounded, size: 19),
+                        ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'مشاهدة جماعية',
+                        onPressed: widget.onWatchParty,
+                        icon: const Icon(Icons.groups_2_rounded, size: 19),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -374,6 +1378,7 @@ class _ImmersiveHero extends StatelessWidget {
     required this.downloading,
     required this.downloadProgress,
     required this.onBack,
+    required this.playLabel,
     required this.onPlay,
     required this.onWatchParty,
     required this.onDownload,
@@ -386,12 +1391,15 @@ class _ImmersiveHero extends StatelessWidget {
   final String backdrop;
   final bool watchLater, favorite, downloaded, downloading;
   final double downloadProgress;
+  final String playLabel;
   final VoidCallback onBack, onPlay, onWatchParty, onWatchLater, onFavorite;
   final VoidCallback? onDownload;
 
   @override
   Widget build(BuildContext context) {
-    final h = MediaQuery.sizeOf(context).height.clamp(560.0, 820.0).toDouble();
+    final h = kIsWeb
+        ? MediaQuery.sizeOf(context).height.clamp(650.0, 900.0).toDouble()
+        : MediaQuery.sizeOf(context).height.clamp(560.0, 820.0).toDouble();
     final genres = details?.genres.take(3).toList() ?? const <String>[];
     return SizedBox(
       height: h,
@@ -418,11 +1426,11 @@ class _ImmersiveHero extends StatelessWidget {
           child: _GlassIcon(icon: Icons.arrow_forward_ios_rounded, onTap: onBack),
         ),
         Positioned(
-          right: 20,
-          left: MediaQuery.sizeOf(context).width * .36,
-          bottom: 34,
+          right: kIsWeb ? 46 : 20,
+          left: MediaQuery.sizeOf(context).width * (kIsWeb ? .42 : .36),
+          bottom: kIsWeb ? 58 : 34,
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(media.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 34, height: 1.05, fontWeight: FontWeight.w900, letterSpacing: -.3)),
+            Text(media.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: kIsWeb ? 48 : 34, height: 1.05, fontWeight: FontWeight.w900, letterSpacing: -.3)),
             const SizedBox(height: 10),
             Wrap(
               spacing: 7,
@@ -435,15 +1443,15 @@ class _ImmersiveHero extends StatelessWidget {
             ),
             if (media.description.isNotEmpty) ...[
               const SizedBox(height: 13),
-              Text(media.description, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withOpacity(.72), fontSize: 13.5, height: 1.55)),
+              Text(media.description, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white.withOpacity(.72), fontSize: kIsWeb ? 18 : 13.5, height: 1.55)),
             ],
             const SizedBox(height: 18),
             Wrap(spacing: 9, runSpacing: 9, children: [
               FilledButton.icon(
                 onPressed: onPlay,
-                style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppColors.background, minimumSize: const Size(128, 50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppColors.background, minimumSize: Size(kIsWeb ? 170 : 128, kIsWeb ? 62 : 50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
                 icon: const Icon(Icons.play_arrow_rounded, size: 27),
-                label: const Text('مشاهدة', style: TextStyle(fontWeight: FontWeight.w900)),
+                label: Text(playLabel, style: const TextStyle(fontWeight: FontWeight.w900)),
               ),
               _HeroAction(
                 icon: Icons.groups_2_rounded,
@@ -533,7 +1541,8 @@ class _FavoriteSaveButtonState extends State<_FavoriteSaveButton>
 
     return Tooltip(
       message: selected ? 'إزالة من المحفوظات' : 'حفظ',
-      child: GestureDetector(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
         onTap: () {
           HapticFeedback.selectionClick();
           widget.onTap();
@@ -701,6 +1710,8 @@ class _SeasonsView extends ConsumerStatefulWidget {
     required this.onWatchPartyEpisode,
     required this.onDownloadEpisode,
     required this.onDownloadSeason,
+    this.initialSeason,
+    this.initialEpisode,
   });
   final Future<List<SeasonGroup>> future;
   final MediaItem media;
@@ -708,6 +1719,8 @@ class _SeasonsView extends ConsumerStatefulWidget {
   final ValueChanged<Episode> onWatchPartyEpisode;
   final ValueChanged<Episode> onDownloadEpisode;
   final ValueChanged<List<Episode>> onDownloadSeason;
+  final int? initialSeason;
+  final int? initialEpisode;
 
   @override
   ConsumerState<_SeasonsView> createState() => _SeasonsViewState();
@@ -715,6 +1728,7 @@ class _SeasonsView extends ConsumerStatefulWidget {
 
 class _SeasonsViewState extends ConsumerState<_SeasonsView> {
   int _selected = 0;
+  bool _didApplyInitial = false;
 
   @override
   Widget build(BuildContext context) {
@@ -747,8 +1761,17 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
             ),
           );
         }
+        if (!_didApplyInitial) {
+          _didApplyInitial = true;
+          final wantedSeason = widget.initialSeason;
+          if (wantedSeason != null) {
+            final index = seasons.indexWhere((season) => season.number == wantedSeason);
+            if (index >= 0) _selected = index;
+          }
+        }
         if (_selected >= seasons.length) _selected = 0;
         final current = seasons[_selected];
+
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SizedBox(
             height: 44,
@@ -775,6 +1798,7 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
             final downloading = downloads.isDownloading(episode.id);
             final progress = downloads.progressOf(episode.id);
             return InkWell(
+              autofocus: false,
               onTap: () => widget.onPlay(episode),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -190,8 +191,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _api = ref.read(apiProvider);
     _libraryStore = ref.read(libraryProvider);
     _watchPartyService = WatchPartyService.instance;
-    _player = Player();
-    _controller = VideoController(_player);
+    _player = Player(
+      configuration: const PlayerConfiguration(
+        bufferSize: 64 * 1024 * 1024,
+      ),
+    );
+    _controller = VideoController(
+      _player,
+      configuration: const VideoControllerConfiguration(
+        hwdec: 'auto-safe',
+        enableHardwareAcceleration: true,
+        androidAttachSurfaceAfterVideoParameters: true,
+      ),
+    );
 
     _positionSub = _player.stream.position.listen((value) {
       if (!mounted || _scrubbing || _switchingSource || _initializingPlayback) return;
@@ -1114,7 +1126,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   List<SubtitleSource> _localSubtitleSources(DownloadItem? item) {
-    if (item == null || item.subtitles.isEmpty) return const <SubtitleSource>[];
+    if (kIsWeb || item == null || item.subtitles.isEmpty) return const <SubtitleSource>[];
     return item.subtitles
         .where((sub) => File(sub.localPath).existsSync())
         .map(
@@ -1214,6 +1226,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   Future<void> _openPreviewCacheDirectory() async {
+    if (kIsWeb) {
+      _previewCacheDirectory = null;
+      _previewDiskBuckets.clear();
+      return;
+    }
     try {
       final root = await getTemporaryDirectory();
       final dir = Directory(
@@ -1250,6 +1267,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   File? _previewFileForBucket(int bucket) {
+    if (kIsWeb) return null;
     final dir = _previewCacheDirectory;
     if (dir == null) return null;
     return File('${dir.path}${Platform.pathSeparator}$bucket.jpg');
@@ -2416,7 +2434,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               const _QualitySwitchHint()
             else if (_buffering && _error == null)
               const _PlayerBufferingHint(),
-            if (_error != null) _ErrorOverlay(onRetry: _retry),
             _DoubleTapFeedback(
               text: _seekFeedback,
               alignment: _seekFeedbackAlignment,
@@ -2498,14 +2515,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         ),
       ),
     );
-  }
-
-  Future<void> _retry() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    await _load();
   }
 
   Widget _buildTopControls() => Padding(
@@ -3442,48 +3451,6 @@ class _PlayerBufferingHint extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-          ),
-        ),
-      );
-}
-
-class _ErrorOverlay extends StatelessWidget {
-  const _ErrorOverlay({required this.onRetry});
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Container(
-            padding: const EdgeInsets.all(22),
-            decoration: BoxDecoration(
-              color: const Color(0xE8121010),
-              borderRadius: BorderRadius.circular(26),
-              border: Border.all(color: Colors.white.withOpacity(.08)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.error_outline_rounded, size: 40),
-                const SizedBox(height: 12),
-                const Text(
-                  'تعذر تشغيل الفيديو',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'المصدر لم يرجع رابط تشغيل متاح لهذه المادة.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white.withOpacity(.55)),
-                ),
-                const SizedBox(height: 16),
-                FilledButton.tonal(
-                  onPressed: onRetry,
-                  child: const Text('إعادة المحاولة'),
-                ),
-              ],
             ),
           ),
         ),

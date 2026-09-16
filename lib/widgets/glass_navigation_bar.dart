@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -23,6 +24,13 @@ class GlassNavigationBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb) {
+      return _WebPreviewNavigationBar(
+        index: index,
+        onChanged: onChanged,
+      );
+    }
+
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final isIos = Platform.isIOS;
     final isAndroid = Platform.isAndroid;
@@ -86,6 +94,239 @@ class GlassNavigationBar extends StatelessWidget {
   }
 }
 
+
+class _WebPreviewNavigationBar extends StatelessWidget {
+  const _WebPreviewNavigationBar({
+    required this.index,
+    required this.onChanged,
+  });
+
+  final int index;
+  final ValueChanged<int> onChanged;
+
+  static const _items = <(IconData, String)>[
+    (Icons.home_rounded, 'الرئيسية'),
+    (Icons.explore_rounded, 'اكتشف'),
+    (Icons.search_rounded, 'البحث'),
+    (Icons.live_tv_rounded, 'التلفاز'),
+    (Icons.video_library_rounded, 'مكتبتي'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 12, 12, 12),
+        child: Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xF2111111),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: Colors.white.withOpacity(.08)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x70000000),
+                blurRadius: 34,
+                offset: Offset(-10, 0),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 18),
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: AppColors.redBright.withOpacity(.14),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: AppColors.redBright.withOpacity(.48),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.movie_filter_rounded,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'سينماتي',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Divider(
+                height: 1,
+                indent: 18,
+                endIndent: 18,
+                color: Colors.white.withOpacity(.07),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: List.generate(_items.length, (i) {
+                      final item = _items[i];
+                      return _WebPreviewNavItem(
+                        icon: item.$1,
+                        label: item.$2,
+                        selected: index == i,
+                        onTap: () => onChanged(i),
+                      );
+                    }),
+                  ),
+                ),
+              ),
+              Container(
+                margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(.035),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.keyboard_alt_outlined,
+                      color: Colors.white38,
+                      size: 15,
+                    ),
+                    SizedBox(width: 5),
+                    Text(
+                      'وضع التلفاز',
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WebPreviewNavItem extends StatefulWidget {
+  const _WebPreviewNavItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_WebPreviewNavItem> createState() => _WebPreviewNavItemState();
+}
+
+class _WebPreviewNavItemState extends State<_WebPreviewNavItem> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.selected || _focused;
+
+    return AnimatedScale(
+      scale: _focused ? 1.08 : 1.0,
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOutCubic,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(20),
+            focusColor: Colors.transparent,
+            hoverColor: Colors.white.withOpacity(.035),
+            onFocusChange: (value) {
+              if (_focused == value) return;
+              setState(() => _focused = value);
+            },
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOutCubic,
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 13),
+              decoration: BoxDecoration(
+                gradient: active
+                    ? LinearGradient(
+                        begin: Alignment.centerRight,
+                        end: Alignment.centerLeft,
+                        colors: [
+                          AppColors.redBright.withOpacity(
+                            widget.selected ? .30 : .18,
+                          ),
+                          AppColors.redBright.withOpacity(.045),
+                        ],
+                      )
+                    : null,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _focused
+                      ? Colors.white.withOpacity(.95)
+                      : widget.selected
+                          ? AppColors.redBright.withOpacity(.62)
+                          : Colors.transparent,
+                  width: _focused ? 2.2 : 1.0,
+                ),
+                boxShadow: _focused
+                    ? [
+                        BoxShadow(
+                          color: AppColors.redBright.withOpacity(.20),
+                          blurRadius: 20,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    widget.icon,
+                    size: _focused ? 28 : 25,
+                    color: active ? Colors.white : Colors.white54,
+                  ),
+                  const SizedBox(height: 7),
+                  Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: active ? Colors.white : Colors.white54,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// iOS uses a UIKit UITabBar mounted by the native iOS host.
 /// No iOS native file is changed by the Android Liquid Glass integration.
 class NativeIosTabBarController {
@@ -106,7 +347,7 @@ class NativeIosTabBarController {
     required bool compact,
     required ValueChanged<int> onChanged,
   }) {
-    if (!Platform.isIOS) return;
+    if (kIsWeb || !Platform.isIOS) return;
     _hostAttached = true;
     _index = index.clamp(0, 4).toInt();
     _compact = compact;
@@ -120,7 +361,7 @@ class NativeIosTabBarController {
     required bool compact,
     required ValueChanged<int> onChanged,
   }) {
-    if (!Platform.isIOS) return;
+    if (kIsWeb || !Platform.isIOS) return;
     _index = index.clamp(0, 4).toInt();
     _compact = compact;
     _onChanged = onChanged;
@@ -129,14 +370,14 @@ class NativeIosTabBarController {
   }
 
   static void detach(ValueChanged<int> onChanged) {
-    if (!Platform.isIOS) return;
+    if (kIsWeb || !Platform.isIOS) return;
     if (identical(_onChanged, onChanged)) _onChanged = null;
     _hostAttached = false;
     _sync();
   }
 
   static void setRouteVisible(bool visible) {
-    if (!Platform.isIOS) return;
+    if (kIsWeb || !Platform.isIOS) return;
     if (_routeVisible == visible) return;
     _routeVisible = visible;
     _sync(retryUntilNativeReady: visible && _hostAttached);
@@ -155,7 +396,7 @@ class NativeIosTabBarController {
   }
 
   static Future<void> _sync({bool retryUntilNativeReady = false}) async {
-    if (!Platform.isIOS) return;
+    if (kIsWeb || !Platform.isIOS) return;
     final serial = ++_syncSerial;
     final attempts = retryUntilNativeReady ? 24 : 1;
 
@@ -210,7 +451,7 @@ class NativeAndroidLiquidGlassController {
     required String fontFamily,
     required ValueChanged<int> onChanged,
   }) {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     _hostAttached = true;
     _index = index.clamp(0, 4).toInt();
     _compact = compact;
@@ -226,7 +467,7 @@ class NativeAndroidLiquidGlassController {
     required String fontFamily,
     required ValueChanged<int> onChanged,
   }) {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     _index = index.clamp(0, 4).toInt();
     _compact = compact;
     _fontFamily = fontFamily;
@@ -236,14 +477,14 @@ class NativeAndroidLiquidGlassController {
   }
 
   static void detach(ValueChanged<int> onChanged) {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     if (identical(_onChanged, onChanged)) _onChanged = null;
     _hostAttached = false;
     _sync();
   }
 
   static void setRouteVisible(bool visible) {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     if (_routeVisible == visible) return;
     _routeVisible = visible;
     _sync(retryUntilNativeReady: visible && _hostAttached);
@@ -262,7 +503,7 @@ class NativeAndroidLiquidGlassController {
   }
 
   static Future<void> _sync({bool retryUntilNativeReady = false}) async {
-    if (!Platform.isAndroid) return;
+    if (kIsWeb || !Platform.isAndroid) return;
     final serial = ++_syncSerial;
     final attempts = retryUntilNativeReady ? 30 : 1;
 

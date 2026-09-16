@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -122,15 +123,22 @@ class _CategoryScreenState extends ConsumerState<CategoryScreen> {
               ? EmptyState(title: 'تعذر تحميل هذا التصنيف', onRetry: _load)
               : GridView.builder(
                   controller: _controller,
-                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 36),
+                  padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 24 : 12, kIsWeb ? 30 : 18, kIsWeb ? 48 : 36),
                   cacheExtent: 1000,
                   itemCount: _items.length + (_loading ? 3 : 0),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 16,
-                    childAspectRatio: .52,
-                  ),
+                  gridDelegate: kIsWeb
+                      ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 300,
+                          crossAxisSpacing: 22,
+                          mainAxisSpacing: 26,
+                          childAspectRatio: .54,
+                        )
+                      : const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 16,
+                          childAspectRatio: .52,
+                        ),
                   itemBuilder: (_, i) {
                     if (i >= _items.length) {
                       return const SkeletonPosterCard(width: double.infinity);
@@ -154,14 +162,21 @@ class _InitialCategorySkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => GridView.builder(
-        padding: const EdgeInsets.fromLTRB(18, 12, 18, 36),
+        padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 24 : 12, kIsWeb ? 30 : 18, kIsWeb ? 48 : 36),
         itemCount: 12,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 16,
-          childAspectRatio: .52,
-        ),
+        gridDelegate: kIsWeb
+            ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 300,
+                crossAxisSpacing: 22,
+                mainAxisSpacing: 26,
+                childAspectRatio: .54,
+              )
+            : const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 16,
+                childAspectRatio: .52,
+              ),
         itemBuilder: (_, __) => const SkeletonPosterCard(width: double.infinity),
       );
 }

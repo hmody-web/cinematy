@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/navigation/cinematy_page_route.dart';
@@ -181,7 +182,7 @@ class _TvScreenState extends State<TvScreen>
           slivers: [
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
+                padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 24 : 16, kIsWeb ? 30 : 18, 12),
                 child: _TvSearchField(
                   controller: _searchController,
                   onChanged: _onSearch,
@@ -266,13 +267,13 @@ class _TvScreenState extends State<TvScreen>
               )
             else
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(18, 4, 18, 130),
+                padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, 4, kIsWeb ? 30 : 18, kIsWeb ? 48 : 130),
                 sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 220,
-                    mainAxisExtent: 154,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
+                  gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: kIsWeb ? 300 : 220,
+                    mainAxisExtent: kIsWeb ? 200 : 154,
+                    crossAxisSpacing: kIsWeb ? 18 : 12,
+                    mainAxisSpacing: kIsWeb ? 18 : 12,
                   ),
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
@@ -886,7 +887,7 @@ class _MatchCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: showScore
                     ? Text(
-                        '${match.homeScore ?? 0}  -  ${match.awayScore ?? 0}',
+                        '${match.awayScore ?? 0}  -  ${match.homeScore ?? 0}',
                         textDirection: TextDirection.ltr,
                         style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: .4),
                       )

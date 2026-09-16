@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -52,7 +53,7 @@ class LibraryScreen extends ConsumerWidget {
       ),
       body: ListView(
         key: const PageStorageKey('library-scroll'),
-        padding: const EdgeInsets.only(bottom: 130),
+        padding: EdgeInsets.only(bottom: kIsWeb ? 50 : 130),
         children: [
           const Padding(
             padding: EdgeInsets.fromLTRB(18, 14, 18, 6),
@@ -94,7 +95,7 @@ class LibraryScreen extends ConsumerWidget {
           ),
           const SectionHeader(title: 'حول سينماتي'),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
+            padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 30 : 18),
             child: _AboutCinematyCard(
               onTap: () => Navigator.push(
                 context,
@@ -104,12 +105,14 @@ class LibraryScreen extends ConsumerWidget {
           ),
           const SectionHeader(title: 'التطبيق'),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
+            padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 30 : 18),
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: Colors.white.withOpacity(.06)),
+                border: Border.all(
+                  color: Colors.white.withOpacity(.06),
+                ),
               ),
               child: Column(
                 children: [
@@ -192,59 +195,102 @@ class LibraryScreen extends ConsumerWidget {
   }
 }
 
-class _AboutCinematyCard extends StatelessWidget {
+class _AboutCinematyCard extends StatefulWidget {
   const _AboutCinematyCard({required this.onTap});
 
   final VoidCallback onTap;
 
   @override
+  State<_AboutCinematyCard> createState() => _AboutCinematyCardState();
+}
+
+class _AboutCinematyCardState extends State<_AboutCinematyCard> {
+  bool _focused = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(24),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(.035),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withOpacity(.065)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(.045),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const BrandLogo(size: 34),
+    final tvFocused = kIsWeb && _focused;
+
+    return AnimatedScale(
+      scale: tvFocused ? 1.035 : 1.0,
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOutCubic,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: widget.onTap,
+          onFocusChange: (value) {
+            if (!kIsWeb || _focused == value) return;
+            setState(() => _focused = value);
+          },
+          focusColor: Colors.transparent,
+          hoverColor: Colors.white.withOpacity(.025),
+          borderRadius: BorderRadius.circular(24),
+          child: Ink(
+            padding: EdgeInsets.symmetric(
+              horizontal: kIsWeb ? 22 : 15,
+              vertical: kIsWeb ? 20 : 14,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.035),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: tvFocused
+                    ? Colors.white.withOpacity(.95)
+                    : Colors.white.withOpacity(.065),
+                width: tvFocused ? 2 : 1,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'حول سينماتي',
-                      style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      'معلومات التطبيق والمطور',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(.46),
-                        fontSize: 11,
+              boxShadow: tvFocused
+                  ? [
+                      BoxShadow(
+                        color: AppColors.redBright.withOpacity(.20),
+                        blurRadius: 22,
                       ),
-                    ),
-                  ],
+                    ]
+                  : null,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: kIsWeb ? 62 : 48,
+                  height: kIsWeb ? 62 : 48,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(.045),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: BrandLogo(size: kIsWeb ? 42 : 34),
                 ),
-              ),
-              const Icon(Icons.chevron_left_rounded, color: Colors.white54),
-            ],
+                SizedBox(width: kIsWeb ? 18 : 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'حول سينماتي',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: kIsWeb ? 18 : 14,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'معلومات التطبيق والمطور',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.46),
+                          fontSize: kIsWeb ? 13 : 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_left_rounded,
+                  color: tvFocused ? Colors.white : Colors.white54,
+                  size: kIsWeb ? 30 : 24,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -570,14 +616,14 @@ class _LibraryQuickGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(18, 6, 18, 6),
+        padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, 6, kIsWeb ? 30 : 18, 6),
         child: GridView.count(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: 2,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: 1.62,
+          crossAxisCount: kIsWeb ? 4 : 2,
+          crossAxisSpacing: kIsWeb ? 18 : 10,
+          mainAxisSpacing: kIsWeb ? 18 : 10,
+          childAspectRatio: kIsWeb ? 1.75 : 1.62,
           children: [
             _QuickCard(
               icon: Icons.download_for_offline_rounded,
@@ -608,7 +654,7 @@ class _LibraryQuickGrid extends StatelessWidget {
       );
 }
 
-class _QuickCard extends StatelessWidget {
+class _QuickCard extends StatefulWidget {
   const _QuickCard({
     required this.icon,
     required this.title,
@@ -622,33 +668,70 @@ class _QuickCard extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(22),
-        child: Ink(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: Colors.white.withOpacity(.06)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, size: 26),
-              const SizedBox(height: 14),
-              Text(
-                title,
-                maxLines: 1,
-                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
+  State<_QuickCard> createState() => _QuickCardState();
+}
+
+class _QuickCardState extends State<_QuickCard> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) => AnimatedScale(
+        scale: kIsWeb && _focused ? 1.045 : 1,
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
+        child: InkWell(
+          onTap: widget.onTap,
+          onFocusChange: (value) {
+            if (!kIsWeb || _focused == value) return;
+            setState(() => _focused = value);
+          },
+          focusColor: Colors.transparent,
+          hoverColor: Colors.white.withOpacity(.025),
+          borderRadius: BorderRadius.circular(22),
+          child: Ink(
+            padding: EdgeInsets.all(kIsWeb ? 20 : 14),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: kIsWeb && _focused
+                    ? Colors.white.withOpacity(.95)
+                    : Colors.white.withOpacity(.06),
+                width: kIsWeb && _focused ? 2 : 1,
               ),
-              const SizedBox(height: 3),
-              Text(
-                subtitle,
-                maxLines: 1,
-                style: TextStyle(color: Colors.white.withOpacity(.42), fontSize: 10.5),
-              ),
-            ],
+              boxShadow: kIsWeb && _focused
+                  ? [
+                      BoxShadow(
+                        color: AppColors.redBright.withOpacity(.20),
+                        blurRadius: 22,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(widget.icon, size: kIsWeb ? 34 : 26),
+                SizedBox(height: kIsWeb ? 18 : 14),
+                Text(
+                  widget.title,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: kIsWeb ? 17 : 13,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  widget.subtitle,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.42),
+                    fontSize: kIsWeb ? 13 : 10.5,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -667,16 +750,17 @@ class _Rail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        height: 270,
+        height: kIsWeb ? 350 : 270,
         child: ListView.separated(
-          padding: const EdgeInsets.symmetric(horizontal: 18),
+          padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 30 : 18),
           scrollDirection: Axis.horizontal,
           itemCount: items.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 12),
+          separatorBuilder: (_, __) => SizedBox(width: kIsWeb ? 18 : 12),
           itemBuilder: (_, i) {
             final item = items[i];
             return MediaPosterCard(
               item: item,
+              width: kIsWeb ? 188 : 142,
               progress: showProgress ? library.cardProgress(item.id)?.ratio : null,
               onTap: () => Navigator.push(
                 context,
@@ -728,12 +812,19 @@ class DownloadsScreen extends ConsumerWidget {
                     padding: const EdgeInsets.fromLTRB(18, 0, 18, 30),
                     sliver: SliverGrid.builder(
                       itemCount: completed.length,
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        crossAxisSpacing: 10,
-                        mainAxisSpacing: 16,
-                        childAspectRatio: .52,
-                      ),
+                      gridDelegate: kIsWeb
+                          ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                              maxCrossAxisExtent: 300,
+                              crossAxisSpacing: 22,
+                              mainAxisSpacing: 26,
+                              childAspectRatio: .54,
+                            )
+                          : const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 10,
+                              mainAxisSpacing: 16,
+                              childAspectRatio: .52,
+                            ),
                       itemBuilder: (_, i) {
                         final d = completed[i];
                         return _DownloadedPoster(
@@ -929,12 +1020,19 @@ class FavoritesScreen extends ConsumerWidget {
           : GridView.builder(
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
               itemCount: items.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 10,
-                mainAxisSpacing: 16,
-                childAspectRatio: .52,
-              ),
+              gridDelegate: kIsWeb
+                  ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 300,
+                      crossAxisSpacing: 22,
+                      mainAxisSpacing: 26,
+                      childAspectRatio: .54,
+                    )
+                  : const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 16,
+                      childAspectRatio: .52,
+                    ),
               itemBuilder: (_, i) => MediaPosterCard(
                 item: items[i],
                 width: double.infinity,
@@ -965,12 +1063,19 @@ class WatchLaterScreen extends ConsumerWidget {
           : GridView.builder(
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
               itemCount: items.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 10,
-                mainAxisSpacing: 16,
-                childAspectRatio: .52,
-              ),
+              gridDelegate: kIsWeb
+                  ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 300,
+                      crossAxisSpacing: 22,
+                      mainAxisSpacing: 26,
+                      childAspectRatio: .54,
+                    )
+                  : const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 16,
+                      childAspectRatio: .52,
+                    ),
               itemBuilder: (_, i) => MediaPosterCard(
                 item: items[i],
                 width: double.infinity,
@@ -1006,18 +1111,33 @@ class ContinueWatchingScreen extends ConsumerWidget {
           : GridView.builder(
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
               itemCount: items.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 10,
-                mainAxisSpacing: 16,
-                childAspectRatio: .52,
-              ),
+              gridDelegate: kIsWeb
+                  ? const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 300,
+                      crossAxisSpacing: 22,
+                      mainAxisSpacing: 26,
+                      childAspectRatio: .54,
+                    )
+                  : const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 16,
+                      childAspectRatio: .52,
+                    ),
               itemBuilder: (_, i) {
                 final item = items[i];
+                final resumeTitle = item.raw['_seriesTitle']?.toString().trim();
+                final resumeSubtitle = (item.season ?? 0) > 0 && (item.episode ?? 0) > 0
+                    ? 'الموسم ${item.season} • الحلقة ${item.episode}'
+                    : null;
                 return MediaPosterCard(
                   item: item,
                   width: double.infinity,
                   progress: store.cardProgress(item.id)?.ratio,
+                  titleOverride: resumeTitle != null && resumeTitle.isNotEmpty
+                      ? resumeTitle
+                      : null,
+                  subtitleOverride: resumeSubtitle,
                   onTap: () => Navigator.push(
                     context,
                     CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),

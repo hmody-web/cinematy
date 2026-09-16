@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -36,6 +37,25 @@ class _SplashScreenState extends State<SplashScreen> {
 
     _player = Player();
     _controller = VideoController(_player);
+
+    // The splash video is a native/mobile startup experience. On Flutter Web
+    // (used only as the lightweight TV preview) media autoplay/asset playback
+    // can be blocked by the browser. Skip it immediately on Web so the preview
+    // opens the real app without changing iOS or Android behavior.
+    if (kIsWeb) {
+      _finished = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder<void>(
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+            pageBuilder: (_, __, ___) => const CinematyShell(),
+          ),
+        );
+      });
+      return;
+    }
 
     // Start one fixed 3-second clock only when playback actually starts.
     // We do not depend on media duration/completed callbacks because those can

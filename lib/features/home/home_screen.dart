@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/display_text.dart';
 import '../../data/models/download_item.dart';
 import '../../data/models/media_item.dart';
 import '../../data/models/network_access_state.dart';
@@ -18,6 +19,7 @@ import '../../widgets/network_image.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/shimmer.dart';
 import '../details/details_screen.dart';
+import 'section_browse_screen.dart';
 import '../library/library_screen.dart';
 import '../player/player_screen.dart';
 
@@ -148,7 +150,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         data: (data) {
           final isCompletelyEmpty = data.highlights.isEmpty &&
               data.newlyAdded.isEmpty &&
-              data.sections.isEmpty;
+              data.sections.isEmpty &&
+              data.collections.isEmpty;
           if (isCompletelyEmpty) {
             return CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -213,18 +216,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
                 SliverToBoxAdapter(
                   child: SizedBox(
-                    height: 270,
+                    height: kIsWeb ? 410 : 270,
                     child: ListView.separated(
-                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                      padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 30 : 18),
                       scrollDirection: Axis.horizontal,
                       itemCount: continueItems.length,
                       separatorBuilder: (_, __) => const SizedBox(width: 12),
                       itemBuilder: (_, i) {
                         final item = continueItems[i];
+                        final resumeTitle =
+                            item.raw['_seriesTitle']?.toString().trim();
+                        final resumeSubtitle = (item.season ?? 0) > 0 && (item.episode ?? 0) > 0
+                            ? 'الموسم ${item.season} • الحلقة ${item.episode}'
+                            : null;
                         return MediaPosterCard(
                           item: item,
-                          width: 138,
+                          width: kIsWeb ? 188 : 138,
                           progress: library.cardProgress(item.id)?.ratio,
+                          titleOverride: resumeTitle != null && resumeTitle.isNotEmpty
+                              ? resumeTitle
+                              : null,
+                          subtitleOverride: resumeSubtitle,
                           onTap: () => _open(context, item),
                         );
                       },
@@ -244,6 +256,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     items: data.newlyAdded.take(18).toList(),
                     onOpen: (item) => _open(context, item),
                     progressFor: (item) => library.cardProgress(item.id)?.ratio,
+                    onMore: () => Navigator.push(
+                      context,
+                      CinematyPageRoute(
+                        builder: (_) => SectionBrowseScreen(
+                          title: 'الإصدارات الجديدة',
+                          id: 'newly-added',
+                          kind: SectionBrowseKind.newlyAdded,
+                          initialItems: data.newlyAdded,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -251,7 +274,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     (section) => <Widget>[
                       SliverToBoxAdapter(
                         child: SectionHeader(
-                          title: section.title,
+                          title: cinematyDisplayTitle(section.title),
                           subtitle: 'مختارات مرتبة من المصدر',
                         ),
                       ),
@@ -260,11 +283,46 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           items: section.items.take(18).toList(),
                           onOpen: (item) => _open(context, item),
                           progressFor: (item) => library.cardProgress(item.id)?.ratio,
+                          onMore: () => Navigator.push(
+                            context,
+                            CinematyPageRoute(
+                              builder: (_) => SectionBrowseScreen(
+                                title: cinematyDisplayTitle(section.title),
+                                id: section.id,
+                                kind: SectionBrowseKind.group,
+                                initialItems: section.items,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ],
                   ),
-              const SliverToBoxAdapter(child: SizedBox(height: 140)),
+              if (data.collections.isNotEmpty) ...[
+                const SliverToBoxAdapter(
+                  child: SectionHeader(
+                    title: 'المجموعات',
+                    subtitle: 'مجموعات مختارة من سينمانا',
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: _CollectionsRail(
+                    collections: data.collections.take(10).toList(),
+                    onOpen: (section) => Navigator.push(
+                      context,
+                      CinematyPageRoute(
+                        builder: (_) => SectionBrowseScreen(
+                          title: cinematyDisplayTitle(section.title),
+                          id: section.id,
+                          kind: SectionBrowseKind.collection,
+                          initialItems: section.items,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              SliverToBoxAdapter(child: SizedBox(height: kIsWeb ? 60 : 140)),
             ],
           );
         },
@@ -285,6 +343,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               highlights: <MediaItem>[],
               newlyAdded: <MediaItem>[],
               sections: <MediaSection>[],
+              collections: <MediaSection>[],
             ),
           ),
     ]);
@@ -397,7 +456,7 @@ class _UnavailableHome extends StatelessWidget {
                     Colors.transparent,
                   ],
                 ),
-                borderRadius: BorderRadius.circular(30),
+                borderRadius: BorderRadius.circular(kIsWeb ? 34 : 30),
                 border: Border.all(color: Colors.white.withOpacity(.075)),
               ),
               child: Column(
@@ -469,7 +528,7 @@ class _UnavailableHome extends StatelessWidget {
             child: SizedBox(
               height: 275,
               child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+                padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 30 : 18),
                 scrollDirection: Axis.horizontal,
                 itemCount: downloads.length,
                 separatorBuilder: (_, __) => const SizedBox(width: 12),
@@ -510,7 +569,7 @@ class _UnavailableHome extends StatelessWidget {
               ),
             ),
           ),
-        const SliverToBoxAdapter(child: SizedBox(height: 140)),
+        SliverToBoxAdapter(child: SizedBox(height: kIsWeb ? 60 : 140)),
       ],
     );
   }
@@ -521,28 +580,241 @@ class _HorizontalRail extends StatelessWidget {
     required this.items,
     required this.onOpen,
     this.progressFor,
+    this.onMore,
   });
 
   final List<MediaItem> items;
   final ValueChanged<MediaItem> onOpen;
   final double? Function(MediaItem item)? progressFor;
+  final VoidCallback? onMore;
 
   @override
   Widget build(BuildContext context) => SizedBox(
-        height: 270,
+        height: kIsWeb ? 410 : 270,
         child: ListView.separated(
           padding: const EdgeInsets.symmetric(horizontal: 18),
           scrollDirection: Axis.horizontal,
           cacheExtent: 900,
-          itemCount: items.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 12),
-          itemBuilder: (_, i) => MediaPosterCard(
-            item: items[i],
-            progress: progressFor?.call(items[i]),
-            onTap: () => onOpen(items[i]),
+          itemCount: items.length + (onMore == null ? 0 : 1),
+          separatorBuilder: (_, __) => SizedBox(width: kIsWeb ? 18 : 12),
+          itemBuilder: (_, i) {
+            if (i == items.length && onMore != null) {
+              return _MorePosterCard(onTap: onMore!);
+            }
+            final item = items[i];
+            return MediaPosterCard(
+              item: item,
+              width: kIsWeb ? 228 : 142,
+              progress: progressFor?.call(item),
+              onTap: () => onOpen(item),
+            );
+          },
+        ),
+      );
+}
+
+class _MorePosterCard extends StatefulWidget {
+  const _MorePosterCard({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  State<_MorePosterCard> createState() => _MorePosterCardState();
+}
+
+class _MorePosterCardState extends State<_MorePosterCard> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final width = kIsWeb ? 228.0 : 142.0;
+    return SizedBox(
+      width: width,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(kIsWeb ? 24 : 18),
+        onTap: widget.onTap,
+        onFocusChange: kIsWeb ? (value) => setState(() => _focused = value) : null,
+        child: AnimatedScale(
+          scale: kIsWeb && _focused ? 1.06 : 1,
+          duration: const Duration(milliseconds: 150),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 56),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topRight,
+                end: Alignment.bottomLeft,
+                colors: [Color(0xFF251011), Color(0xFF100B0B)],
+              ),
+              borderRadius: BorderRadius.circular(kIsWeb ? 24 : 18),
+              border: Border.all(
+                color: _focused
+                    ? Colors.white
+                    : AppColors.redBright.withOpacity(.30),
+                width: _focused ? 2.2 : 1,
+              ),
+              boxShadow: _focused
+                  ? [
+                      BoxShadow(
+                        color: AppColors.redBright.withOpacity(.26),
+                        blurRadius: 24,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: kIsWeb ? 68 : 50,
+                  height: kIsWeb ? 68 : 50,
+                  decoration: BoxDecoration(
+                    color: AppColors.redBright.withOpacity(.14),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.arrow_back_rounded,
+                    color: Colors.white,
+                    size: kIsWeb ? 34 : 26,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'المزيد',
+                  style: TextStyle(
+                    fontSize: kIsWeb ? 24 : 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'عرض القسم كاملاً',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.46),
+                    fontSize: kIsWeb ? 13 : 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CollectionsRail extends StatelessWidget {
+  const _CollectionsRail({required this.collections, required this.onOpen});
+
+  final List<MediaSection> collections;
+  final ValueChanged<MediaSection> onOpen;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: kIsWeb ? 270 : 168,
+        child: ListView.separated(
+          padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 30 : 18),
+          scrollDirection: Axis.horizontal,
+          itemCount: collections.length,
+          separatorBuilder: (_, __) => SizedBox(width: kIsWeb ? 20 : 12),
+          itemBuilder: (_, i) => _CollectionCard(
+            section: collections[i],
+            onTap: () => onOpen(collections[i]),
           ),
         ),
       );
+}
+
+class _CollectionCard extends StatefulWidget {
+  const _CollectionCard({required this.section, required this.onTap});
+  final MediaSection section;
+  final VoidCallback onTap;
+
+  @override
+  State<_CollectionCard> createState() => _CollectionCardState();
+}
+
+class _CollectionCardState extends State<_CollectionCard> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = widget.section.items.isEmpty ? null : widget.section.items.first;
+    final image = preview == null
+        ? ''
+        : (preview.backdropUrl.isNotEmpty ? preview.backdropUrl : preview.posterUrl);
+    final width = kIsWeb ? 410.0 : 238.0;
+
+    return SizedBox(
+      width: width,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(kIsWeb ? 26 : 20),
+        onTap: widget.onTap,
+        onFocusChange: kIsWeb ? (value) => setState(() => _focused = value) : null,
+        child: AnimatedScale(
+          scale: kIsWeb && _focused ? 1.045 : 1,
+          duration: const Duration(milliseconds: 150),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(kIsWeb ? 26 : 20),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                const ColoredBox(color: Color(0xFF161010)),
+                if (image.isNotEmpty)
+                  CinematyNetworkImage(url: image, fit: BoxFit.cover),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0x22000000), Color(0xEE070505)],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: kIsWeb ? 22 : 14,
+                  left: kIsWeb ? 22 : 14,
+                  bottom: kIsWeb ? 22 : 14,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        cinematyDisplayTitle(widget.section.title),
+                        textDirection: TextDirection.rtl,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: kIsWeb ? 24 : 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        'فتح المجموعة',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.56),
+                          fontSize: kIsWeb ? 13 : 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_focused)
+                  IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(26),
+                        border: Border.all(color: Colors.white, width: 2.3),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _HeroCarousel extends StatefulWidget {
@@ -555,8 +827,9 @@ class _HeroCarousel extends StatefulWidget {
 }
 
 class _HeroCarouselState extends State<_HeroCarousel> {
-  final _controller = PageController(viewportFraction: .91);
+  final _controller = PageController(viewportFraction: kIsWeb ? .94 : .91);
   int _index = 0;
+  int? _focusedIndex;
 
   @override
   void dispose() {
@@ -567,8 +840,12 @@ class _HeroCarouselState extends State<_HeroCarousel> {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final bannerWidth = screenWidth * .91;
-    final bannerHeight = (bannerWidth * .60).clamp(210.0, 335.0).toDouble();
+    final bannerWidth = screenWidth * (kIsWeb ? .78 : .91);
+    // TV preview uses a cinematic 16:9 hero instead of the phone-style crop.
+    // The clamp keeps it luxurious on 1080p/4K while leaving room for rails.
+    final bannerHeight = kIsWeb
+        ? (bannerWidth * 9 / 16).clamp(500.0, 760.0).toDouble()
+        : (bannerWidth * .60).clamp(210.0, 335.0).toDouble();
 
     return Column(
       children: [
@@ -585,11 +862,20 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                     : item.posterUrl;
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
+                  child: InkWell(
                     onTap: () => widget.onOpen(item),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(30),
+                    onFocusChange: (focused) {
+                      if (!kIsWeb) return;
+                      setState(() => _focusedIndex = focused ? index : null);
+                    },
+                    focusColor: Colors.transparent,
+                    hoverColor: Colors.transparent,
+                    borderRadius: BorderRadius.circular(kIsWeb ? 34 : 30),
+                    child: AnimatedScale(
+                      scale: kIsWeb && _focusedIndex == index ? 1.018 : 1,
+                      duration: const Duration(milliseconds: 150),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(kIsWeb ? 34 : 30),
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
@@ -613,10 +899,29 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                               ),
                             ),
                           ),
+                          if (kIsWeb && _focusedIndex == index)
+                            IgnorePointer(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(34),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(.95),
+                                    width: 2.5,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: AppColors.redBright.withOpacity(.28),
+                                      blurRadius: 28,
+                                      spreadRadius: 1,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                           Positioned(
-                            right: 16,
-                            left: 16,
-                            bottom: 14,
+                            right: kIsWeb ? 46 : 16,
+                            left: kIsWeb ? 46 : 16,
+                            bottom: kIsWeb ? 42 : 14,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -638,8 +943,8 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                                   item.title,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 21,
+                                  style: TextStyle(
+                                    fontSize: kIsWeb ? 40 : 21,
                                     fontWeight: FontWeight.w900,
                                     height: 1.05,
                                   ),
@@ -650,6 +955,7 @@ class _HeroCarouselState extends State<_HeroCarousel> {
                           ),
                         ],
                       ),
+                    ),
                     ),
                   ),
                 );

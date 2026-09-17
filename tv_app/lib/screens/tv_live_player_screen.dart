@@ -46,9 +46,10 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
   StreamSubscription<bool>? _bufferingSub;
   StreamSubscription<bool>? _playingSub;
   Timer? _hideTimer;
-  Timer? _playbackGuardTimer;
-  bool _userPaused = false;
-  bool _openingStream = false;
+
+  late final bool _lowEndLiveOptimization;
+  int? _previousImageCacheMaximumSize;
+  int? _previousImageCacheMaximumBytes;
 
   late List<TvChannel> _channels;
   late int _index;
@@ -57,19 +58,26 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
   @override
   void initState() {
     super.initState();
+    _lowEndLiveOptimization = tvDisplayPreferences.lowEndLiveOptimization;
+    if (_lowEndLiveOptimization) _applyLowEndLiveUiMode();
+
     _channels = widget.channels.isEmpty ? [widget.channel] : widget.channels;
     _index = widget.initialIndex.clamp(0, _channels.length - 1);
     _current = _channels[_index];
 
     _player = Player(
       configuration: const PlayerConfiguration(
-        bufferSize: 64 * 1024 * 1024,
+        // This is the same native buffer size used by the earlier TV build
+        // where live video did not run in slow motion.
+        bufferSize: 32 * 1024 * 1024,
       ),
     );
     _videoController = VideoController(
       _player,
       configuration: const VideoControllerConfiguration(
-        hwdec: 'auto-safe',
+        // Use the exact hardware path that previously rendered normally on TV.
+        // No auto-safe fallback & no forced GPU VO.
+        hwdec: 'mediacodec',
         enableHardwareAcceleration: true,
         androidAttachSurfaceAfterVideoParameters: true,
       ),
@@ -80,39 +88,34 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
     });
     _playingSub = _player.stream.playing.listen((value) {
       _playing.value = value;
-      if (!value && !_userPaused && !_openingStream) {
-        unawaited(_keepLivePlaying());
-      }
     });
-    _startPlaybackGuard();
     unawaited(_openCurrent(first: true));
   }
 
-  void _startPlaybackGuard() {
-    _playbackGuardTimer?.cancel();
-    _playbackGuardTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (!mounted || _userPaused || _openingStream) return;
-      if (!_player.state.playing) {
-        unawaited(_keepLivePlaying());
-      }
-    });
+  void _applyLowEndLiveUiMode() {
+    // Keep the proven video decoder/buffer configuration untouched. This mode
+    // only frees UI/image memory so the live video surface gets more headroom.
+    final cache = PaintingBinding.instance.imageCache;
+    _previousImageCacheMaximumSize = cache.maximumSize;
+    _previousImageCacheMaximumBytes = cache.maximumSizeBytes;
+    if (cache.maximumSize > 80) cache.maximumSize = 80;
+    const targetBytes = 24 * 1024 * 1024;
+    if (cache.maximumSizeBytes > targetBytes) {
+      cache.maximumSizeBytes = targetBytes;
+    }
+    cache.clearLiveImages();
   }
 
-  Future<void> _keepLivePlaying() async {
-    if (!mounted || _userPaused || _openingStream || _player.state.playing) {
-      return;
-    }
-    try {
-      await _player.play();
-    } catch (_) {
-      // Do not refresh/reopen the channel here. Keep the current live session
-      // intact and retry play on the next guard tick.
-    }
+  void _restoreImageCacheLimits() {
+    if (!_lowEndLiveOptimization) return;
+    final cache = PaintingBinding.instance.imageCache;
+    final previousSize = _previousImageCacheMaximumSize;
+    final previousBytes = _previousImageCacheMaximumBytes;
+    if (previousSize != null) cache.maximumSize = previousSize;
+    if (previousBytes != null) cache.maximumSizeBytes = previousBytes;
   }
 
   Future<void> _openCurrent({bool first = false}) async {
-    _userPaused = false;
-    _openingStream = true;
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     final channel = _current ?? widget.channel;
     final url = first && channel.id == widget.channel.id
@@ -120,11 +123,11 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
         : _service.streamUrl(channel);
     _buffering.value = true;
     try {
+      // Open the live stream once and leave libmpv/MediaCodec in control.
+      // Do not stop, reopen, refresh or inject repeated play() calls.
       await _player.open(Media(url), play: true);
     } catch (_) {
       _buffering.value = false;
-    } finally {
-      _openingStream = false;
     }
     _showControls();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -135,9 +138,14 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
   void _showControls() {
     _controlsVisible.value = true;
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted) _controlsVisible.value = false;
-    });
+    _hideTimer = Timer(
+      _lowEndLiveOptimization
+          ? const Duration(milliseconds: 2200)
+          : const Duration(seconds: 3),
+      () {
+        if (mounted) _controlsVisible.value = false;
+      },
+    );
   }
 
   Future<void> _switchTo(int index) async {
@@ -222,13 +230,9 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
         key == LogicalKeyboardKey.select ||
         key == LogicalKeyboardKey.space ||
         key == LogicalKeyboardKey.mediaPlayPause) {
-      if (_player.state.playing) {
-        _userPaused = true;
-        unawaited(_player.pause());
-      } else {
-        _userPaused = false;
-        unawaited(_player.play());
-      }
+      _player.state.playing
+          ? unawaited(_player.pause())
+          : unawaited(_player.play());
       _showControls();
       return KeyEventResult.handled;
     }
@@ -239,7 +243,6 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
   @override
   void dispose() {
     _hideTimer?.cancel();
-    _playbackGuardTimer?.cancel();
     unawaited(_bufferingSub?.cancel());
     unawaited(_playingSub?.cancel());
     _controlsVisible.dispose();
@@ -249,6 +252,7 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
     _playFocus.dispose();
     _favoriteFocus.dispose();
     _backFocus.dispose();
+    _restoreImageCacheLimits();
     unawaited(_player.dispose());
     super.dispose();
   }
@@ -289,14 +293,23 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
               ),
               ValueListenableBuilder<bool>(
                 valueListenable: _controlsVisible,
-                builder: (context, visible, _) => IgnorePointer(
-                  ignoring: !visible,
-                  child: AnimatedOpacity(
-                    opacity: visible ? 1 : 0,
-                    duration: const Duration(milliseconds: 100),
-                    child: _overlay(),
-                  ),
-                ),
+                builder: (context, visible, _) {
+                  if (_lowEndLiveOptimization) {
+                    // On weak TVs, remove the overlay tree completely while it
+                    // is hidden instead of keeping an opacity layer composited.
+                    return visible
+                        ? _overlay(lowEndMode: true)
+                        : const SizedBox.shrink();
+                  }
+                  return IgnorePointer(
+                    ignoring: !visible,
+                    child: AnimatedOpacity(
+                      opacity: visible ? 1 : 0,
+                      duration: const Duration(milliseconds: 100),
+                      child: _overlay(lowEndMode: false),
+                    ),
+                  );
+                },
               ),
             ],
           ),
@@ -305,19 +318,23 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
     );
   }
 
-  Widget _overlay() {
+  Widget _overlay({required bool lowEndMode}) {
     final current = _current ?? widget.channel;
-    final start = (_index - 2).clamp(0, _channels.length);
-    final end = (_index + 3).clamp(0, _channels.length);
+    final radius = lowEndMode ? 1 : 2;
+    final start = (_index - radius).clamp(0, _channels.length);
+    final end = (_index + radius + 1).clamp(0, _channels.length);
     final nearby = _channels.sublist(start, end);
 
     return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xA5000000), Colors.transparent, Color(0x70000000)],
-        ),
+      decoration: BoxDecoration(
+        color: lowEndMode ? const Color(0x52000000) : null,
+        gradient: lowEndMode
+            ? null
+            : const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xA5000000), Colors.transparent, Color(0x70000000)],
+              ),
       ),
       child: SafeArea(
         child: Padding(
@@ -326,9 +343,9 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
             textDirection: TextDirection.rtl,
             children: [
               SizedBox(
-                width: 300,
+                width: lowEndMode ? 250 : 300,
                 child: Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: EdgeInsets.all(lowEndMode ? 9 : 12),
                   decoration: BoxDecoration(
                     color: const Color(0xD90D0D0D),
                     borderRadius: BorderRadius.circular(16),
@@ -372,9 +389,26 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
                                     textDirection: TextDirection.rtl,
                                     children: [
                                       SizedBox(
-                                        width: 42,
-                                        height: 42,
-                                        child: TvImage(channel.icon, cacheWidth: 100, borderRadius: 8),
+                                        width: lowEndMode ? 34 : 42,
+                                        height: lowEndMode ? 34 : 42,
+                                        child: lowEndMode
+                                            ? Container(
+                                                alignment: Alignment.center,
+                                                decoration: BoxDecoration(
+                                                  color: Colors.white.withOpacity(.055),
+                                                  borderRadius: BorderRadius.circular(8),
+                                                ),
+                                                child: const Icon(
+                                                  Icons.live_tv_rounded,
+                                                  size: 18,
+                                                  color: Colors.white70,
+                                                ),
+                                              )
+                                            : TvImage(
+                                                channel.icon,
+                                                cacheWidth: 100,
+                                                borderRadius: 8,
+                                              ),
                                       ),
                                       const SizedBox(width: 9),
                                       Expanded(
@@ -462,13 +496,9 @@ class _TvLivePlayerScreenState extends State<TvLivePlayerScreen> {
                       builder: (context, playing, _) => TvFocus(
                         focusNode: _playFocus,
                         onPressed: () {
-                          if (playing) {
-                            _userPaused = true;
-                            unawaited(_player.pause());
-                          } else {
-                            _userPaused = false;
-                            unawaited(_player.play());
-                          }
+                          playing
+                              ? unawaited(_player.pause())
+                              : unawaited(_player.play());
                           _showControls();
                         },
                         borderRadius: 999,

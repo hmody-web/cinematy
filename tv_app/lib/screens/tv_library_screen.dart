@@ -21,7 +21,7 @@ class TvLibraryScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([tvLibrary, tvDownloads, TvActivationService.instance.subscription]),
+      animation: Listenable.merge([tvLibrary, tvDownloads, tvDisplayPreferences, TvActivationService.instance.subscription]),
       builder: (context, _) {
         final downloads = tvDownloads.items;
         final activeDownloads = tvDownloads.activeItems;
@@ -87,10 +87,251 @@ class TvLibraryScreen extends StatelessWidget {
             if (downloads.isNotEmpty)
               _DownloadsRow(items: downloads),
             const SizedBox(height: 18),
+            _DisplaySettingsCard(
+              hideScoreboard: tvDisplayPreferences.hideScoreboard,
+              startInLiveTv: tvDisplayPreferences.startInLiveTv,
+              windowsFullscreen: tvDisplayPreferences.windowsFullscreen,
+              lowEndLiveOptimization: tvDisplayPreferences.lowEndLiveOptimization,
+            ),
+            const SizedBox(height: 18),
             const _DeveloperCard(),
           ],
         );
       },
+    );
+  }
+}
+
+
+class _DisplaySettingsCard extends StatelessWidget {
+  const _DisplaySettingsCard({
+    required this.hideScoreboard,
+    required this.startInLiveTv,
+    required this.windowsFullscreen,
+    required this.lowEndLiveOptimization,
+  });
+
+  final bool hideScoreboard;
+  final bool startInLiveTv;
+  final bool windowsFullscreen;
+  final bool lowEndLiveOptimization;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 17, 18, 18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+          colors: [Color(0xFF17191E), Color(0xFF101216)],
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(.20),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            textDirection: TextDirection.rtl,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: TvColors.red.withOpacity(.13),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: const Icon(Icons.tune_rounded, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'إعدادات العرض والتلفاز',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                    ),
+                    SizedBox(height: 3),
+                    Text(
+                      'خصص طريقة بدء سينماتي وشكل قسم التلفاز',
+                      style: TextStyle(fontSize: 12, color: TvColors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 15),
+          _SettingsToggleRow(
+            icon: Icons.scoreboard_rounded,
+            title: 'إخفاء شاشة السكوربورد',
+            subtitle: 'إخفاء غلاف مباريات اليوم بالكامل من قسم التلفاز',
+            value: hideScoreboard,
+            onPressed: () => unawaited(
+              tvDisplayPreferences.setHideScoreboard(!hideScoreboard),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _SettingsToggleRow(
+            icon: Icons.live_tv_rounded,
+            title: 'فتح قسم التلفاز عند التشغيل',
+            subtitle: 'يجعل قسم التلفاز هو الصفحة الرئيسية عند تشغيل التطبيق',
+            value: startInLiveTv,
+            onPressed: () => unawaited(
+              tvDisplayPreferences.setStartInLiveTv(!startInLiveTv),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _SettingsToggleRow(
+            icon: Icons.speed_rounded,
+            title: 'تحسين البث المباشر للأجهزة الضعيفة',
+            subtitle: 'يخفف حمل الواجهة والبيانات أثناء مشاهدة القنوات بدون تقليل جودة البث',
+            value: lowEndLiveOptimization,
+            onPressed: () => unawaited(
+              tvDisplayPreferences.setLowEndLiveOptimization(!lowEndLiveOptimization),
+            ),
+          ),
+          if (tvIsWindowsDesktop) ...[
+            const SizedBox(height: 10),
+            _SettingsToggleRow(
+              icon: windowsFullscreen
+                  ? Icons.fullscreen_rounded
+                  : Icons.fullscreen_exit_rounded,
+              title: 'ملء الشاشة في Windows',
+              subtitle: windowsFullscreen
+                  ? 'مفعّل — التطبيق يغطي الشاشة بالكامل'
+                  : 'متوقف — نافذة سينماتي مصغرة وبدون إطارات Windows',
+              value: windowsFullscreen,
+              onPressed: () => unawaited(
+                tvDisplayPreferences.setWindowsFullscreen(!windowsFullscreen),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsToggleRow extends StatelessWidget {
+  const _SettingsToggleRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocus(
+      onPressed: onPressed,
+      borderRadius: 14,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        decoration: BoxDecoration(
+          color: value ? TvColors.red.withOpacity(.085) : Colors.white.withOpacity(.035),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: value ? TvColors.red.withOpacity(.32) : Colors.white.withOpacity(.07),
+          ),
+        ),
+        child: Row(
+          textDirection: TextDirection.rtl,
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: value ? TvColors.red.withOpacity(.16) : Colors.white.withOpacity(.055),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                icon,
+                size: 22,
+                color: value ? Colors.white : Colors.white60,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      height: 1.35,
+                      color: TvColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 14),
+            _SettingsSwitch(value: value),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsSwitch extends StatelessWidget {
+  const _SettingsSwitch({required this.value});
+  final bool value;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      width: 54,
+      height: 30,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: value ? TvColors.red : Colors.white12,
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: value ? TvColors.red : Colors.white12),
+      ),
+      child: AnimatedAlign(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        alignment: value ? Alignment.centerLeft : Alignment.centerRight,
+        child: Container(
+          width: 22,
+          height: 22,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: Colors.black38, blurRadius: 5, offset: Offset(0, 2)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

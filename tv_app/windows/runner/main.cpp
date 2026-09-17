@@ -26,29 +26,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
   window.SetQuitOnClose(true);
 
-  HWND hwnd = window.GetHandle();
-  if (hwnd != nullptr) {
-    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-    MONITORINFO monitor_info{};
-    monitor_info.cbSize = sizeof(MONITORINFO);
-    if (GetMonitorInfo(monitor, &monitor_info)) {
-      SetWindowLongPtr(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-      LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-      ex_style &= ~(WS_EX_CLIENTEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME);
-      SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
+  // Window size/style is applied from Dart before the first Flutter frame.
+  // This lets the saved Cinematy setting decide between fullscreen and the
+  // centered borderless window without a visible resize flash.
 
-      const RECT& r = monitor_info.rcMonitor;
-      SetWindowPos(hwnd, HWND_TOP,
-                   r.left, r.top,
-                   r.right - r.left,
-                   r.bottom - r.top,
-                   SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
-      ShowWindow(hwnd, SW_SHOW);
-      UpdateWindow(hwnd);
-      SetForegroundWindow(hwnd);
-      SetFocus(hwnd);
-    }
-  }
 
   MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {

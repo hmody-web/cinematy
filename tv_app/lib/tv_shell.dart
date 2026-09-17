@@ -7,6 +7,7 @@ import 'screens/tv_library_screen.dart';
 import 'screens/tv_live_screen.dart';
 import 'screens/tv_search_screen.dart';
 import 'tv_focus.dart';
+import 'tv_context.dart';
 import 'tv_app_exit.dart';
 import 'tv_theme.dart';
 import 'tv_platform_ui.dart';
@@ -19,8 +20,14 @@ class TvShell extends StatefulWidget {
 }
 
 class _TvShellState extends State<TvShell> {
-  int _index = 0;
+  late int _index;
   DateTime? _lastBackPress;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = tvDisplayPreferences.startInLiveTv ? 3 : 0;
+  }
 
   static const _items = <(IconData, String)>[
     (Icons.home_rounded, 'الرئيسية'),

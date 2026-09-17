@@ -25,7 +25,12 @@ Future<void> main() async {
     tvDownloads.load(),
     tvPlaybackPreferences.load(),
     tvChannelFavorites.load(),
+    tvDisplayPreferences.load(),
   ]);
+
+  // Apply the saved Windows presentation before the first Flutter frame.
+  // Android TV ignores this and keeps its existing fullscreen behavior.
+  await tvDisplayPreferences.applyWindowMode();
 
   runApp(const CinematyTvApp());
 }

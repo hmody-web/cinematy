@@ -95,7 +95,9 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     _videoController = VideoController(
       _player,
       configuration: const VideoControllerConfiguration(
-        hwdec: 'auto-safe',
+        // Keep the exact Android TV decode path that was smooth before:
+        // native MediaCodec + delayed surface attach. Do not force a custom VO.
+        hwdec: 'mediacodec',
         enableHardwareAcceleration: true,
         androidAttachSurfaceAfterVideoParameters: true,
       ),

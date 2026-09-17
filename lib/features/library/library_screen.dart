@@ -37,6 +37,7 @@ class LibraryScreen extends ConsumerWidget {
     final downloads = ref.watch(downloadProvider);
     final favorites = library.favoriteItems();
     final later = library.watchLaterItems();
+    final appSettings = ref.watch(appSettingsProvider);
 
     return Scaffold(
       appBar: CinematyTopBar(
@@ -91,6 +92,24 @@ class LibraryScreen extends ConsumerWidget {
                   builder: (_) => const WatchPartyGroupsScreen(),
                 ),
               ),
+            ),
+          ),
+          const SectionHeader(
+            title: 'إعدادات التلفاز',
+            subtitle: 'خصص السكوربورد والبث المباشر وطريقة فتح القسم',
+          ),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: kIsWeb ? 30 : 18),
+            child: _TvExperienceSettingsCard(
+              hideScoreboard: appSettings.hideTvScoreboard,
+              openTvOnLaunch: appSettings.openTvOnLaunch,
+              lowEndLiveOptimization: appSettings.lowEndLiveOptimization,
+              onHideScoreboard: (value) =>
+                  ref.read(appSettingsProvider).setHideTvScoreboard(value),
+              onOpenTvOnLaunch: (value) =>
+                  ref.read(appSettingsProvider).setOpenTvOnLaunch(value),
+              onLowEndOptimization: (value) =>
+                  ref.read(appSettingsProvider).setLowEndLiveOptimization(value),
             ),
           ),
           const SectionHeader(title: 'حول سينماتي'),
@@ -192,6 +211,116 @@ class LibraryScreen extends ConsumerWidget {
         type: AppNoticeType.success,
       );
     }
+  }
+}
+
+class _TvExperienceSettingsCard extends StatelessWidget {
+  const _TvExperienceSettingsCard({
+    required this.hideScoreboard,
+    required this.openTvOnLaunch,
+    required this.lowEndLiveOptimization,
+    required this.onHideScoreboard,
+    required this.onOpenTvOnLaunch,
+    required this.onLowEndOptimization,
+  });
+
+  final bool hideScoreboard;
+  final bool openTvOnLaunch;
+  final bool lowEndLiveOptimization;
+  final ValueChanged<bool> onHideScoreboard;
+  final ValueChanged<bool> onOpenTvOnLaunch;
+  final ValueChanged<bool> onLowEndOptimization;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withOpacity(.06)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          _TvSettingsSwitch(
+            icon: Icons.scoreboard_rounded,
+            title: 'إخفاء سكوردبورد المباريات',
+            subtitle: 'إخفاء الغلاف السينمائي من قسم التلفاز',
+            value: hideScoreboard,
+            onChanged: onHideScoreboard,
+          ),
+          Divider(height: 1, indent: 62, color: Colors.white.withOpacity(.06)),
+          _TvSettingsSwitch(
+            icon: Icons.live_tv_rounded,
+            title: 'فتح التلفاز عند تشغيل التطبيق',
+            subtitle: 'يبدأ سينماتي مباشرة من قسم التلفاز',
+            value: openTvOnLaunch,
+            onChanged: onOpenTvOnLaunch,
+          ),
+          Divider(height: 1, indent: 62, color: Colors.white.withOpacity(.06)),
+          _TvSettingsSwitch(
+            icon: Icons.memory_rounded,
+            title: 'تحسين البث للأجهزة الضعيفة',
+            subtitle: 'يخفف حمل الواجهة والخلفية بدون تقليل جودة البث',
+            value: lowEndLiveOptimization,
+            onChanged: onLowEndOptimization,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TvSettingsSwitch extends StatelessWidget {
+  const _TvSettingsSwitch({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile.adaptive(
+      value: value,
+      onChanged: onChanged,
+      activeColor: AppColors.redBright,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      secondary: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: value
+              ? AppColors.redBright.withOpacity(.12)
+              : Colors.white.withOpacity(.05),
+          borderRadius: BorderRadius.circular(13),
+        ),
+        child: Icon(
+          icon,
+          size: 21,
+          color: value ? AppColors.redBright : Colors.white70,
+        ),
+      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Text(
+          subtitle,
+          style: TextStyle(
+            color: Colors.white.withOpacity(.48),
+            fontSize: 11.5,
+            height: 1.35,
+          ),
+        ),
+      ),
+    );
   }
 }
 

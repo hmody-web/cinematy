@@ -2,32 +2,45 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/stores/app_settings_store.dart';
+import '../../providers.dart';
 import '../../widgets/cinematy_top_bar.dart';
 import '../../widgets/network_image.dart';
 import '../../widgets/shimmer.dart';
-import 'tv_models.dart';
+import 'bein_channel_resolver.dart';
 import 'football_match_models.dart';
 import 'football_matches_service.dart';
+import 'mobile_match_hero.dart';
+import 'sports_match_hero_service.dart';
 import 'tv_channel_group_screen.dart';
+import 'tv_models.dart';
+import 'tv_player_screen.dart';
+import 'tv_runtime_state.dart';
 import 'xtream_tv_service.dart';
 
-class TvScreen extends StatefulWidget {
+class TvScreen extends ConsumerStatefulWidget {
   const TvScreen({super.key});
 
   @override
-  State<TvScreen> createState() => _TvScreenState();
+  ConsumerState<TvScreen> createState() => _TvScreenState();
 }
 
-class _TvScreenState extends State<TvScreen>
+class _TvScreenState extends ConsumerState<TvScreen>
     with AutomaticKeepAliveClientMixin {
   final XtreamTvService _service = XtreamTvService();
   final FootballMatchesService _matchesService = FootballMatchesService();
+  final SportsMatchHeroService _heroService = SportsMatchHeroService();
   final TextEditingController _searchController = TextEditingController();
+  final PageController _heroPageController = PageController();
+
   Timer? _searchDebounce;
-  Timer? _matchesRefreshTimer;
+  Timer? _heroRefreshTimer;
+  Timer? _heroEnrichDelay;
+  Timer? _heroAutoPageTimer;
 
   List<TvCategory> _categories = const [];
   List<TvChannel> _channels = const [];
@@ -38,9 +51,14 @@ class _TvScreenState extends State<TvScreen>
   String? _error;
   String _query = '';
   int _requestSerial = 0;
-  List<FootballMatch> _todayMatches = const [];
-  bool _loadingMatches = true;
-  String? _matchesError;
+
+  List<SportsMatchHeroData> _heroes = const [];
+  final Set<String> _heroEnriching = <String>{};
+  final Set<String> _heroEnriched = <String>{};
+  int _heroIndex = 0;
+  bool _heroLoading = true;
+  bool _heroAutoForward = true;
+  late final AppSettingsStore _settings;
 
   @override
   bool get wantKeepAlive => true;
@@ -48,45 +66,373 @@ class _TvScreenState extends State<TvScreen>
   @override
   void initState() {
     super.initState();
+    _settings = ref.read(appSettingsProvider);
+    _settings.addListener(_onSettingsChanged);
+    tvLivePlaybackActive.addListener(_onPlaybackStateChanged);
     _loadInitial();
-    _loadMatches();
-    _matchesRefreshTimer = Timer.periodic(
-      const Duration(seconds: 20),
-      (_) => _loadMatches(silent: true),
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!_settings.hideTvScoreboard) {
+        _loadHero();
+        _startHeroRefreshTimer();
+      } else {
+        setState(() => _heroLoading = false);
+      }
+    });
+  }
+
+  Duration get _heroRefreshInterval => _settings.lowEndLiveOptimization
+      ? const Duration(minutes: 15)
+      : const Duration(minutes: 5);
+
+  void _onSettingsChanged() {
+    if (!mounted) return;
+    if (_settings.hideTvScoreboard) {
+      _heroRefreshTimer?.cancel();
+      _heroAutoPageTimer?.cancel();
+      _heroEnrichDelay?.cancel();
+      if (_heroLoading) setState(() => _heroLoading = false);
+      return;
+    }
+    _startHeroRefreshTimer();
+    _scheduleHeroAutoAdvance();
+    if (_heroes.isEmpty && !_heroLoading) unawaited(_loadHero());
+    setState(() {});
+  }
+
+  void _onPlaybackStateChanged() {
+    if (!mounted || !_settings.lowEndLiveOptimization) return;
+    if (tvLivePlaybackActive.value) {
+      _heroRefreshTimer?.cancel();
+      _heroAutoPageTimer?.cancel();
+      _heroEnrichDelay?.cancel();
+      return;
+    }
+    if (!_settings.hideTvScoreboard) {
+      _startHeroRefreshTimer();
+      _scheduleHeroAutoAdvance();
+    }
+  }
+
+  void _startHeroRefreshTimer() {
+    _heroRefreshTimer?.cancel();
+    if (_settings.hideTvScoreboard ||
+        (_settings.lowEndLiveOptimization && tvLivePlaybackActive.value)) {
+      return;
+    }
+    _heroRefreshTimer = Timer.periodic(
+      _heroRefreshInterval,
+      (_) => _loadHero(silent: true),
     );
   }
 
   @override
   void dispose() {
+    _settings.removeListener(_onSettingsChanged);
+    tvLivePlaybackActive.removeListener(_onPlaybackStateChanged);
     _searchDebounce?.cancel();
-    _matchesRefreshTimer?.cancel();
+    _heroRefreshTimer?.cancel();
+    _heroEnrichDelay?.cancel();
+    _heroAutoPageTimer?.cancel();
+    _heroPageController.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadMatches({bool silent = false}) async {
-    if (!silent && mounted) {
-      setState(() {
-        _loadingMatches = true;
-        _matchesError = null;
-      });
-    }
+  Future<void> _loadHero({bool silent = false}) async {
+    if (_settings.hideTvScoreboard) return;
+    if (!silent && mounted) setState(() => _heroLoading = true);
     try {
-      final matches = await _matchesService.getTodayMatches();
+      final matches = await _matchesService.getNext24HourMatches();
       if (!mounted) return;
-      setState(() {
-        _todayMatches = matches;
-        _loadingMatches = false;
-        _matchesError = null;
+
+      final hasRealInWindow = matches.any((match) {
+        final home = _clubKey(match.homeName);
+        final away = _clubKey(match.awayName);
+        return home.contains('real madrid') ||
+            away.contains('real madrid') ||
+            home.contains('ريال مدريد') ||
+            away.contains('ريال مدريد');
       });
-    } catch (e) {
+      final hasBarcaInWindow = matches.any((match) {
+        final home = _clubKey(match.homeName);
+        final away = _clubKey(match.awayName);
+        return home.contains('barcelona') ||
+            away.contains('barcelona') ||
+            home.contains('برشلونة') ||
+            away.contains('برشلونة');
+      });
+
+      final featuredFuture = await _matchesService.getNextFeaturedClubMatches(
+        needRealMadrid: !hasRealInWindow,
+        needBarcelona: !hasBarcaInWindow,
+      );
       if (!mounted) return;
-      // Keep the TV screen usable, but surface the football-feed failure.
+
+      final byId = <String, FootballMatch>{
+        for (final match in matches) match.id: match,
+        for (final match in featuredFuture) match.id: match,
+      };
+      final ordered = byId.values.toList(growable: false)..sort(_compareHeroMatches);
+      final previous = <String, SportsMatchHeroData>{
+        for (final item in _heroes) item.match.id: item,
+      };
+      final next = ordered
+          .map(
+            (match) => previous[match.id]?.withMatch(match) ??
+                SportsMatchHeroData(
+                  match: match,
+                  homeBadge: match.homeLogo,
+                  awayBadge: match.awayLogo,
+                  leagueBadge: match.leagueLogo,
+                ),
+          )
+          .toList(growable: false);
+      var nextIndex = _heroIndex;
+      if (next.isEmpty) {
+        nextIndex = 0;
+      } else if (nextIndex >= next.length) {
+        nextIndex = next.length - 1;
+      }
       setState(() {
-        _loadingMatches = false;
-        _matchesError = e.toString();
+        _heroes = next;
+        _heroIndex = nextIndex;
+        _heroLoading = false;
       });
+      if (next.isNotEmpty) {
+        if (silent) _heroEnriched.remove(next[nextIndex].match.id);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_heroPageController.hasClients) return;
+          final current = _heroPageController.page?.round();
+          if (current != nextIndex) _heroPageController.jumpToPage(nextIndex);
+        });
+        _scheduleHeroEnrich(nextIndex);
+        _scheduleHeroAutoAdvance();
+      } else {
+        _heroAutoPageTimer?.cancel();
+      }
+    } catch (_) {
+      if (mounted) setState(() => _heroLoading = false);
     }
+  }
+
+  int _compareHeroMatches(FootballMatch a, FootballMatch b) {
+    final pa = _featuredPriority(a);
+    final pb = _featuredPriority(b);
+    if (pa != pb) return pb.compareTo(pa);
+    if (a.isLive != b.isLive) return a.isLive ? -1 : 1;
+    final at = a.startsAt ?? DateTime(9999, 12, 31);
+    final bt = b.startsAt ?? DateTime(9999, 12, 31);
+    return at.compareTo(bt);
+  }
+
+  int _featuredPriority(FootballMatch match) {
+    final home = _clubKey(match.homeName);
+    final away = _clubKey(match.awayName);
+    final real = home.contains('real madrid') || away.contains('real madrid') ||
+        home.contains('ريال مدريد') || away.contains('ريال مدريد');
+    final barca = home.contains('barcelona') || away.contains('barcelona') ||
+        home.contains('برشلونة') || away.contains('برشلونة');
+    if (real && barca) return 3;
+    if (real || barca) return 2;
+    return 0;
+  }
+
+  String _clubKey(String value) => value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9؀-ۿ]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  void _scheduleHeroEnrich(int index) {
+    _heroEnrichDelay?.cancel();
+    _heroEnrichDelay = Timer(
+      const Duration(milliseconds: 180),
+      () => _enrichHeroAt(index),
+    );
+  }
+
+  Future<void> _enrichHeroAt(int index) async {
+    if (_settings.hideTvScoreboard || index < 0 || index >= _heroes.length) return;
+    final match = _heroes[index].match;
+    if (_heroEnriched.contains(match.id) || _heroEnriching.contains(match.id)) return;
+    _heroEnriching.add(match.id);
+    try {
+      final enriched = await _heroService.enrich(match);
+      if (!mounted) return;
+      final current = _heroes.indexWhere((item) => item.match.id == match.id);
+      if (current < 0) return;
+      final updated = [..._heroes];
+      updated[current] = enriched;
+      setState(() => _heroes = updated);
+      _heroEnriched.add(match.id);
+    } catch (_) {
+      // Base match card stays usable if artwork enrichment is unavailable.
+    } finally {
+      _heroEnriching.remove(match.id);
+    }
+  }
+
+  void _onHeroPageChanged(int index) {
+    if (_heroIndex != index) setState(() => _heroIndex = index);
+    _scheduleHeroEnrich(index);
+    _scheduleHeroAutoAdvance();
+  }
+
+  int _nextHeroIndex() {
+    if (_heroes.length <= 1) return _heroIndex;
+    if (_heroIndex >= _heroes.length - 1) {
+      _heroAutoForward = false;
+    } else if (_heroIndex <= 0) {
+      _heroAutoForward = true;
+    }
+    return (_heroIndex + (_heroAutoForward ? 1 : -1))
+        .clamp(0, _heroes.length - 1)
+        .toInt();
+  }
+
+  void _scheduleHeroAutoAdvance() {
+    _heroAutoPageTimer?.cancel();
+    if (_settings.hideTvScoreboard ||
+        _heroes.length <= 1 ||
+        (_settings.lowEndLiveOptimization && tvLivePlaybackActive.value)) {
+      return;
+    }
+
+    // Prepare the next scoreboard while the current one is still visible.
+    // This keeps network/image work out of the actual page animation.
+    final warmIndex = _nextHeroIndex();
+    if (warmIndex != _heroIndex) {
+      unawaited(_enrichHeroAt(warmIndex));
+    }
+
+    _heroAutoPageTimer = Timer(const Duration(seconds: 10), () {
+      if (!mounted || !_heroPageController.hasClients || _heroes.length <= 1) return;
+      final next = _nextHeroIndex();
+      if (next == _heroIndex) {
+        _scheduleHeroAutoAdvance();
+        return;
+      }
+      _heroPageController.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 520),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  Future<void> _watchHero(SportsMatchHeroData data) async {
+    final broadcast = data.broadcastName.trim();
+    if (broadcast.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لم تُعلن القناة الناقلة لهذه المباراة بعد.')),
+      );
+      return;
+    }
+
+    final channel = _bestBroadcastMatch(_allChannels, broadcast);
+    if (!mounted) return;
+    if (channel == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('القناة الناقلة: $broadcast — لم أجد قناة مطابقة ضمن مصادر التلفاز الحالية.')),
+      );
+      return;
+    }
+
+    final lowEnd = _settings.lowEndLiveOptimization;
+    if (lowEnd) {
+      _heroRefreshTimer?.cancel();
+      _heroEnrichDelay?.cancel();
+    }
+    await Navigator.of(context).push(
+      CinematyPageRoute(
+        builder: (_) => TvPlayerScreen(
+          channel: channel,
+          channels: _allChannels,
+          service: _service,
+        ),
+      ),
+    );
+    if (mounted && lowEnd && !_settings.hideTvScoreboard) {
+      _startHeroRefreshTimer();
+    }
+  }
+
+  TvChannel? _bestBroadcastMatch(List<TvChannel> channels, String broadcast) {
+    if (channels.isEmpty || broadcast.trim().isEmpty) return null;
+
+    // IMPORTANT: resolve beIN against the *real* channels currently returned
+    // by this app's Xtream source. This also understands providers that put
+    // "beIN" only in the category while naming the stream simply "6 FHD".
+    final broadcastIsBein = BeinChannelResolver.isBeinLabel(broadcast);
+    final realBein = BeinChannelResolver.resolve(
+      channels: channels,
+      categories: _categories,
+      broadcast: broadcast,
+      preferredVariant: _settings.lowEndLiveOptimization ? 'F' : 'N',
+    );
+    if (realBein != null) return realBein;
+
+    // If the scoreboard says beIN, never fall through to a generic same-number
+    // channel from another network. Keep searching real beIN rows only.
+    if (broadcastIsBein) return null;
+
+    final target = _channelIdentity(broadcast);
+    final targetNumber = RegExp(r'(\d{1,2})').firstMatch(target)?.group(1);
+    TvChannel? best;
+    var bestScore = 0;
+
+    for (final channel in channels) {
+      final candidate = _channelIdentity(channel.name);
+      if (candidate.isEmpty) continue;
+      var score = 0;
+      if (candidate == target) score = 100;
+      if (candidate.contains(target) || target.contains(candidate)) score = 82;
+      final targetTokens = target.split(' ').where((e) => e.length > 1).toSet();
+      final candidateTokens = candidate.split(' ').where((e) => e.length > 1).toSet();
+      score += targetTokens.intersection(candidateTokens).length * 12;
+      final candidateNumber = RegExp(r'(\d{1,2})').firstMatch(candidate)?.group(1);
+      if (targetNumber != null && candidateNumber != null) {
+        score += targetNumber == candidateNumber ? 30 : -45;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = channel;
+      }
+    }
+    return bestScore >= 44 ? best : null;
+  }
+
+  bool _isBeinChannel(String value) {
+    final id = _channelIdentity(value).replaceAll(' ', '');
+    return id.contains('bein') || id.contains('beinsports');
+  }
+
+  String? _beinChannelNumber(String value) {
+    if (!_isBeinChannel(value)) return null;
+    final id = _channelIdentity(value);
+    final match = RegExp(r'(\d{1,2})').firstMatch(id);
+    return match?.group(1);
+  }
+
+  String _channelIdentity(String value) {
+    var prepared = value
+        .replaceAll('إ', 'ا')
+        .replaceAll('أ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ى', 'ي')
+        .replaceAll('ؤ', 'و')
+        .replaceAll('ئ', 'ي');
+    prepared = normalizeTvChannelName(prepared);
+    return prepared
+        .replaceAll('mena', ' ')
+        .replaceAll('qatar', ' ')
+        .replaceAll('arabic', ' ')
+        .replaceAll('english', ' ')
+        .replaceAll('middle east', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 
   Future<void> _loadInitial() async {
@@ -152,9 +498,7 @@ class _TvScreenState extends State<TvScreen>
 
   List<TvChannel> get _visibleChannels {
     if (_query.isEmpty) return _channels;
-    return _channels
-        .where((e) => e.name.toLowerCase().contains(_query))
-        .toList(growable: false);
+    return _channels.where((e) => e.name.toLowerCase().contains(_query)).toList(growable: false);
   }
 
   String _friendlyError(Object error) {
@@ -169,32 +513,53 @@ class _TvScreenState extends State<TvScreen>
   Widget build(BuildContext context) {
     super.build(context);
     final channels = _visibleChannels;
+    final size = MediaQuery.sizeOf(context);
+    final landscape = size.width > size.height;
+    final heroHeight = landscape
+        ? (size.height * .78).clamp(300.0, 520.0).toDouble()
+        : (size.height * .64).clamp(430.0, 620.0).toDouble();
 
     return Scaffold(
       appBar: const CinematyTopBar(section: 'التلفاز'),
       body: RefreshIndicator(
         onRefresh: () async {
-          await Future.wait([_loadInitial(), _loadMatches()]);
+          await _loadInitial();
+          if (!_settings.hideTvScoreboard) await _loadHero();
         },
         child: CustomScrollView(
           key: const PageStorageKey('tv-scroll'),
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
+            if (!_settings.hideTvScoreboard && (_heroLoading || _heroes.isNotEmpty))
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    landscape ? 12 : 10,
+                    landscape ? 8 : 10,
+                    landscape ? 12 : 10,
+                    landscape ? 12 : 14,
+                  ),
+                  child: SizedBox(
+                    height: heroHeight,
+                    child: _heroLoading && _heroes.isEmpty
+                        ? _MobileHeroLoading(landscape: landscape)
+                        : MobileMatchHeroCarousel(
+                            items: _heroes,
+                            controller: _heroPageController,
+                            currentIndex: _heroIndex,
+                            onPageChanged: _onHeroPageChanged,
+                            onWatch: _watchHero,
+                          ),
+                  ),
+                ),
+              ),
             SliverToBoxAdapter(
               child: Padding(
-                padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 24 : 16, kIsWeb ? 30 : 18, 12),
+                padding: EdgeInsets.fromLTRB(kIsWeb ? 30 : 18, kIsWeb ? 24 : 8, kIsWeb ? 30 : 18, 12),
                 child: _TvSearchField(
                   controller: _searchController,
                   onChanged: _onSearch,
                 ),
-              ),
-            ),
-            SliverToBoxAdapter(
-              child: _TodayMatchesStrip(
-                matches: _todayMatches,
-                loading: _loadingMatches,
-                error: _matchesError,
-                onRetry: _loadMatches,
               ),
             ),
             SliverToBoxAdapter(
@@ -302,6 +667,24 @@ class _TvScreenState extends State<TvScreen>
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MobileHeroLoading extends StatelessWidget {
+  const _MobileHeroLoading({required this.landscape});
+  final bool landscape;
+
+  @override
+  Widget build(BuildContext context) {
+    return CinematyShimmer(
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHigh,
+          borderRadius: BorderRadius.circular(landscape ? 18 : 28),
+          border: Border.all(color: Colors.white.withOpacity(.05)),
         ),
       ),
     );

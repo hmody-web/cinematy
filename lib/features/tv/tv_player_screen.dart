@@ -3,15 +3,18 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../widgets/network_image.dart';
 import 'tv_ios_native_video.dart';
 import 'tv_models.dart';
 import 'tv_system_pip.dart';
+import 'tv_runtime_state.dart';
 import 'xtream_tv_service.dart';
 
 class TvPlayerScreen extends StatefulWidget {
@@ -48,7 +51,9 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
   bool _showControls = true;
   bool _showRail = false;
   Timer? _controlsTimer;
-  Timer? _playbackGuardTimer;
+  bool _lowEndLiveOptimization = false;
+  int? _previousImageCacheMaximumSize;
+  int? _previousImageCacheMaximumBytes;
   bool _searching = false;
   String _query = '';
   bool _userPaused = false;
@@ -72,20 +77,25 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    tvLivePlaybackActive.value = true;
     _enterTrueFullscreen();
     _current = widget.channel;
+    unawaited(_loadLowEndPreference());
 
     if (!_isIOS) {
       final player = Player(
         configuration: const PlayerConfiguration(
-          bufferSize: 64 * 1024 * 1024,
+          // Same proven live-TV buffer used by the stable Android TV build.
+          bufferSize: 32 * 1024 * 1024,
         ),
       );
       _player = player;
       _videoController = VideoController(
         player,
-        configuration: const VideoControllerConfiguration(
-          hwdec: 'auto-safe',
+        configuration: VideoControllerConfiguration(
+          // Android uses MediaCodec directly. Chrome preview keeps the safe
+          // generic path so the web build is not tied to an Android decoder.
+          hwdec: kIsWeb ? 'auto-safe' : 'mediacodec',
           enableHardwareAcceleration: true,
           androidAttachSurfaceAfterVideoParameters: true,
         ),
@@ -95,11 +105,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
       });
       _playingSub = player.stream.playing.listen((value) {
         if (mounted) setState(() => _playing = value);
-        if (!value && !_userPaused && !_openingStream) {
-          unawaited(_keepLivePlaying());
-        }
       });
-      _startPlaybackGuard();
       _openCurrent();
     } else {
       _buffering = false;
@@ -126,34 +132,40 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
     _scheduleControlsHide();
   }
 
-  void _startPlaybackGuard() {
-    _playbackGuardTimer?.cancel();
-    _playbackGuardTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (!mounted || _isIOS || _userPaused || _openingStream) return;
-      final player = _player;
-      if (player == null) return;
-      if (!player.state.playing) {
-        unawaited(_keepLivePlaying());
-      }
-    });
+  Future<void> _loadLowEndPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('cinematy_low_end_live_optimization') ?? false;
+    if (!mounted || !enabled) return;
+    _lowEndLiveOptimization = true;
+    final cache = PaintingBinding.instance.imageCache;
+    _previousImageCacheMaximumSize = cache.maximumSize;
+    _previousImageCacheMaximumBytes = cache.maximumSizeBytes;
+    if (cache.maximumSize > 80) cache.maximumSize = 80;
+    const targetBytes = 24 * 1024 * 1024;
+    if (cache.maximumSizeBytes > targetBytes) cache.maximumSizeBytes = targetBytes;
+    cache.clearLiveImages();
+    if (mounted) setState(() {});
   }
 
-  Future<void> _keepLivePlaying() async {
-    if (!mounted || _isIOS || _userPaused || _openingStream) return;
-    final player = _player;
-    if (player == null || player.state.playing) return;
-    try {
-      await player.play();
-    } catch (_) {
-      // Keep the current stream/session untouched. The guard will retry play
-      // without reopening or refreshing the channel.
+  void _restoreImageCacheLimits() {
+    if (!_lowEndLiveOptimization) return;
+    final cache = PaintingBinding.instance.imageCache;
+    if (_previousImageCacheMaximumSize != null) {
+      cache.maximumSize = _previousImageCacheMaximumSize!;
+    }
+    if (_previousImageCacheMaximumBytes != null) {
+      cache.maximumSizeBytes = _previousImageCacheMaximumBytes!;
     }
   }
 
   void _scheduleControlsHide() {
     _controlsTimer?.cancel();
     if (_pipMode || !_showControls) return;
-    _controlsTimer = Timer(const Duration(seconds: 5), () {
+    _controlsTimer = Timer(
+      _lowEndLiveOptimization
+          ? const Duration(milliseconds: 2200)
+          : const Duration(seconds: 5),
+      () {
       if (!mounted || _pipMode) return;
       setState(() {
         _showControls = false;
@@ -291,14 +303,15 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    tvLivePlaybackActive.value = false;
     TvSystemPip.setActive(false);
     if (_isIOS) _iosController.stopPip();
     _bufferingSub?.cancel();
     _playingSub?.cancel();
     _pipSub?.cancel();
     _controlsTimer?.cancel();
-    _playbackGuardTimer?.cancel();
     _searchController.dispose();
+    _restoreImageCacheLimits();
     _player?.dispose();
     unawaited(_restoreSystemUi());
     super.dispose();
@@ -408,6 +421,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen>
                           _markInteraction();
                           setState(() => _query = value);
                         },
+                        lowEndMode: _lowEndLiveOptimization,
                         onSelect: (channel) {
                           _markInteraction();
                           _switchChannel(channel);
@@ -591,6 +605,7 @@ class _ChannelRail extends StatelessWidget {
     required this.onSearchToggle,
     required this.onSearch,
     required this.onSelect,
+    required this.lowEndMode,
   });
 
   final List<TvChannel> channels;
@@ -600,6 +615,7 @@ class _ChannelRail extends StatelessWidget {
   final VoidCallback onSearchToggle;
   final ValueChanged<String> onSearch;
   final ValueChanged<TvChannel> onSelect;
+  final bool lowEndMode;
 
   @override
   Widget build(BuildContext context) {
@@ -690,12 +706,20 @@ class _ChannelRail extends StatelessWidget {
                                     color: Colors.black.withOpacity(.32),
                                     borderRadius: BorderRadius.circular(9),
                                   ),
-                                  child: CinematyNetworkImage(
-                                    url: item.icon,
-                                    fit: BoxFit.contain,
-                                    memCacheWidth: 220,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
+                                  child: lowEndMode
+                                      ? Icon(
+                                          Icons.live_tv_rounded,
+                                          size: 24,
+                                          color: active
+                                              ? AppColors.redBright
+                                              : Colors.white54,
+                                        )
+                                      : CinematyNetworkImage(
+                                          url: item.icon,
+                                          fit: BoxFit.contain,
+                                          memCacheWidth: 220,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
                                 ),
                               ),
                               const SizedBox(height: 5),

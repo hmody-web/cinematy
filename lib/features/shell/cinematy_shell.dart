@@ -2,6 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../providers.dart';
 
 import '../../widgets/glass_navigation_bar.dart';
 import '../discover/discover_screen.dart';
@@ -10,16 +13,18 @@ import '../library/library_screen.dart';
 import '../search/search_screen.dart';
 import '../tv/tv_screen.dart';
 
-class CinematyShell extends StatefulWidget {
+class CinematyShell extends ConsumerStatefulWidget {
   const CinematyShell({super.key});
 
   @override
-  State<CinematyShell> createState() => _CinematyShellState();
+  ConsumerState<CinematyShell> createState() => _CinematyShellState();
 }
 
-class _CinematyShellState extends State<CinematyShell> {
+class _CinematyShellState extends ConsumerState<CinematyShell> {
   int _index = 0;
   bool _compactNavigation = false;
+  bool _startupTabApplied = false;
+  bool _userChangedTab = false;
 
   final _screens = const [
     HomeScreen(),
@@ -46,6 +51,7 @@ class _CinematyShellState extends State<CinematyShell> {
 
   void _changeTab(int value) {
     if (value == _index) return;
+    _userChangedTab = true;
     HapticFeedback.selectionClick();
     setState(() {
       _index = value;
@@ -57,6 +63,20 @@ class _CinematyShellState extends State<CinematyShell> {
 
   @override
   Widget build(BuildContext context) {
+    final settings = ref.watch(appSettingsProvider);
+    if (!_startupTabApplied && settings.loaded) {
+      _startupTabApplied = true;
+      if (!_userChangedTab && settings.openTvOnLaunch && _index != 3) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _userChangedTab) return;
+          setState(() {
+            _index = 3;
+            _compactNavigation = false;
+          });
+        });
+      }
+    }
+
     final content = NotificationListener<UserScrollNotification>(
       onNotification: _onUserScroll,
       child: IndexedStack(index: _index, children: _screens),

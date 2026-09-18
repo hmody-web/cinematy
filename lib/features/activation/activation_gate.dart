@@ -210,7 +210,9 @@ class _ActivationScreenState extends State<_ActivationScreen>
 
   void _changed(String value) {
     _debounce?.cancel();
-    if (_message.isNotEmpty) setState(() => _message = '');
+    setState(() {
+      if (_message.isNotEmpty) _message = '';
+    });
     if (value.length == 6) {
       _debounce = Timer(const Duration(milliseconds: 220), _verify);
     }

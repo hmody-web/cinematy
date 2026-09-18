@@ -31,7 +31,7 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
 
   List<TvCategory> _allCategories = const [];
   List<TvChannel> _channels = const [];
-  String _server = 'N';
+  List<TvChannel> _allChannels = const [];
   String? _selectedId;
   bool _loading = true;
   String? _error;
@@ -48,8 +48,6 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
   Timer? _heroAutoPageTimer;
   Timer? _heroRevealTimer;
   bool _heroAutoForward = true;
-
-  static const _servers = <String>['N', 'G', 'F'];
 
   @override
   void initState() {
@@ -391,32 +389,57 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
         value.contains('بي إن');
   }
 
-  String? _serverOf(String value) {
-    final upper = value.toUpperCase();
-    for (final server in _servers) {
-      if (RegExp('(^|[^A-Z])$server([^A-Z]|\$)').hasMatch(upper) ||
-          upper.contains('SERVER $server') ||
-          upper.contains('سيرفر $server')) {
-        return server;
-      }
+  static const List<_QualitySection> _qualitySections = <_QualitySection>[
+    _QualitySection('__all__', 'الكل'),
+    _QualitySection('4k', '4K'),
+    _QualitySection('hevc', 'HEVC'),
+    _QualitySection('fhd', 'FHD'),
+    _QualitySection('hd', 'HD'),
+    _QualitySection('sd', 'SD'),
+  ];
+
+  String _channelQualityKey(TvChannel channel) {
+    final categoryName = _allCategories
+        .where((category) => category.id == channel.categoryId)
+        .map((category) => category.name)
+        .cast<String?>()
+        .firstWhere((_) => true, orElse: () => null);
+    final value = '${channel.name} ${categoryName ?? ''}'.toLowerCase();
+
+    // Dedicated 4K section, separate from HEVC.
+    if (value.contains('4k') ||
+        value.contains('uhd') ||
+        value.contains('2160')) {
+      return '4k';
     }
-    return null;
+    if (value.contains('hevc') || value.contains('h265')) {
+      return 'hevc';
+    }
+    if (value.contains('fhd') || value.contains('1080')) return 'fhd';
+    if (value.contains('720') ||
+        RegExp(r'(^|[^a-z])hd([^a-z]|$)').hasMatch(value)) {
+      return 'hd';
+    }
+    if (value.contains('sd') || value.contains('480')) return 'sd';
+
+    // Streams without an explicit marker stay visible in All only.
+    return 'other';
   }
 
-  List<TvCategory> get _visibleCategories {
-    final tagged = _allCategories.where((category) {
-      final marker = _serverOf(category.name);
-      if (_server == 'N' && _isBein(category.name)) return true;
-      return marker == _server;
-    }).toList(growable: false);
-
-    final source = tagged.isEmpty ? _allCategories : tagged;
-    return [...source]..sort((a, b) {
-      final ab = _isBein(a.name);
-      final bb = _isBein(b.name);
-      if (ab != bb) return ab ? -1 : 1;
-      return a.name.compareTo(b.name);
+  List<TvChannel> _channelsForSection(String sectionId) {
+    final source = _allChannels.where((channel) {
+      if (_isIntro(channel.name)) return false;
+      final category = _allCategories
+          .where((item) => item.id == channel.categoryId)
+          .map((item) => item.name)
+          .cast<String?>()
+          .firstWhere((_) => true, orElse: () => null);
+      return category == null || !_isIntro(category);
     });
+    if (sectionId == '__all__') return source.toList(growable: false);
+    return source
+        .where((channel) => _channelQualityKey(channel) == sectionId)
+        .toList(growable: false);
   }
 
   Future<void> _load() async {
@@ -425,8 +448,15 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
       _error = null;
     });
     try {
-      _allCategories = (await _service.getCategories())
+      final results = await Future.wait([
+        _service.getCategories(),
+        _service.getChannels(),
+      ]);
+      _allCategories = (results[0] as List<TvCategory>)
           .where((category) => !_isIntro(category.name))
+          .toList(growable: false);
+      _allChannels = (results[1] as List<TvChannel>)
+          .where((channel) => !_isIntro(channel.name))
           .toList(growable: false);
       await _selectFirstCategory();
       if (mounted) setState(() => _loading = false);
@@ -439,41 +469,18 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
     }
   }
 
-  Future<void> _selectServer(String server) async {
-    if (_server == server) return;
-    setState(() {
-      _server = server;
-      _loading = true;
-    });
-    await _selectFirstCategory();
-    if (mounted) setState(() => _loading = false);
-  }
-
   Future<void> _selectFirstCategory() async {
-    final categories = _visibleCategories;
-    if (categories.isEmpty) {
-      _selectedId = null;
-      _channels = const [];
-      return;
-    }
-    await _select(categories.first, force: true);
+    await _selectQuality(_qualitySections.first, force: true);
   }
 
-  Future<void> _select(TvCategory category, {bool force = false}) async {
-    if (!force && _selectedId == category.id) return;
+  Future<void> _selectQuality(_QualitySection section, {bool force = false}) async {
+    if (!force && _selectedId == section.id) return;
     setState(() {
-      _selectedId = category.id;
+      _selectedId = section.id;
       _loading = true;
     });
     try {
-      final channels = (await _service.getChannels(categoryId: category.id))
-          .where((channel) => !_isIntro(channel.name))
-          .where((channel) {
-            final marker = _serverOf(channel.name);
-            if (_server == 'N' && _isBein(channel.name)) return true;
-            return marker == null || marker == _server;
-          })
-          .toList(growable: false);
+      final channels = _channelsForSection(section.id);
       if (!mounted) return;
       setState(() {
         _channels = channels;
@@ -497,20 +504,108 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
     final groups = map.entries
         .map((entry) => _ChannelGroup(entry.key, entry.value))
         .toList(growable: false)
-      ..sort((a, b) => _channelOrder(a.title).compareTo(_channelOrder(b.title)));
+      ..sort((a, b) {
+        // IMPORTANT: sort by the REAL stream names inside the group, not
+        // by the cleaned display title. This keeps Qatar beIN 1..9 pinned
+        // first in "الكل" and in every quality section independently.
+        final aPriority = _qatariBeinGroupPriority(a);
+        final bPriority = _qatariBeinGroupPriority(b);
+
+        if (aPriority != null && bPriority != null) {
+          final order = aPriority.compareTo(bPriority);
+          if (order != 0) return order;
+        } else if (aPriority != null) {
+          return -1;
+        } else if (bPriority != null) {
+          return 1;
+        }
+
+        return _normalizeChannelName(a.title)
+            .compareTo(_normalizeChannelName(b.title));
+      });
     return groups;
   }
 
   int _channelOrder(String value) {
-    final normalized = value.toLowerCase();
-    final bein = normalized.contains('bein') ||
-        normalized.contains('بين') ||
-        normalized.contains('بي إن');
-    final number = int.tryParse(
-          RegExp(r'(\d+)').firstMatch(normalized)?.group(1) ?? '',
-        ) ??
-        999;
-    return (bein ? 0 : 10000) + number;
+    final priority = _qatariBeinPriority(value);
+    if (priority != null) return priority;
+
+    // Anything that is not one of the exact Qatar beIN 1..9 variants
+    // comes strictly after the complete priority block. This prevents
+    // beIN France / USA / Australia / etc. from appearing between them.
+    return 10000;
+  }
+
+  int? _qatariBeinGroupPriority(_ChannelGroup group) {
+    int? best;
+    for (final channel in group.channels) {
+      final priority = _qatariBeinPriority(channel.name);
+      if (priority != null && (best == null || priority < best)) {
+        best = priority;
+      }
+    }
+    return best;
+  }
+
+  int? _qatariBeinPriority(String value) {
+    final normalized = _normalizeChannelName(value);
+
+    // The actual Qatar family in this playlist starts with:
+    // -beIN SPORT 1 ... -beIN SPORT 9
+    // and carries an isolated variant marker such as (N), (G), or (F).
+    final numberMatch = RegExp(
+      r'^\s*[-•|:]*\s*bein\s*sports?\s*[-_: ]*([1-9])(?:\D|$)',
+      caseSensitive: false,
+    ).firstMatch(normalized);
+
+    if (numberMatch == null) return null;
+
+    final number = int.tryParse(numberMatch.group(1) ?? '');
+    if (number == null) return null;
+
+    final variant = _qatariBeinVariant(normalized);
+    if (variant == null) return null;
+
+    // Keep every channel number together in exact 1 -> 9 order.
+    // Within each number: N first, then G, then F.
+    final variantRank = switch (variant) {
+      'n' => 0,
+      'g' => 1,
+      'f' => 2,
+      _ => 9,
+    };
+
+    return (number * 10) + variantRank;
+  }
+
+  String? _qatariBeinVariant(String value) {
+    // Only accept an isolated N/G/F marker, e.g.:
+    // (N), [G], - F, "_N". Do not mistake the F in FHD for variant F.
+    final match = RegExp(
+      r'(?:^|[\s\(\[\{_\-])([ngf])(?:$|[\s\)\]\}_\-])',
+      caseSensitive: false,
+    ).firstMatch(value);
+
+    return match?.group(1)?.toLowerCase();
+  }
+
+  String _normalizeChannelName(String value) {
+    const eastern = '٠١٢٣٤٥٦٧٨٩';
+    const persian = '۰۱۲۳۴۵۶۷۸۹';
+    const western = '0123456789';
+
+    var result = value.toLowerCase();
+    for (var i = 0; i < 10; i++) {
+      result = result
+          .replaceAll(eastern[i], western[i])
+          .replaceAll(persian[i], western[i]);
+    }
+    return result
+        .replaceAll('إ', 'ا')
+        .replaceAll('أ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 
   TvChannel _smoothVariantFor(List<TvChannel> variants) {
@@ -530,9 +625,35 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
     return ordered.first;
   }
 
+  int _qualityRank(String value) {
+    final name = value.toLowerCase();
+    if (name.contains('sd') || name.contains('480')) return 10;
+    if ((name.contains('hd') && !name.contains('fhd')) || name.contains('720')) return 20;
+    if (name.contains('fhd') || name.contains('1080')) return 30;
+    if (name.contains('4k') || name.contains('uhd') || name.contains('2160')) return 40;
+    if (name.contains('hevc') || name.contains('h265')) return 50;
+    return 35;
+  }
+
+  String _qualityLabel(String value) {
+    final name = value.toLowerCase();
+    if (name.contains('hevc') || name.contains('h265')) return 'HEVC';
+    if (name.contains('4k') || name.contains('uhd') || name.contains('2160')) return '4K';
+    if (name.contains('fhd') || name.contains('1080')) return 'FHD';
+    if ((name.contains('hd') && !name.contains('fhd')) || name.contains('720')) return 'HD';
+    if (name.contains('sd') || name.contains('480')) return 'SD';
+    return 'نسخة';
+  }
+
   Future<void> _openGroup(_ChannelGroup group) async {
-    if (group.channels.length == 1) {
-      unawaited(_play(group.channels.first));
+    final allVariants = _allChannels
+        .where((channel) => channel.groupKey == group.key && !_isIntro(channel.name))
+        .toList(growable: false);
+    final variants = allVariants.isEmpty ? group.channels : allVariants;
+    final orderedVariants = [...variants]..sort((a, b) => _qualityRank(a.name).compareTo(_qualityRank(b.name)));
+
+    if (orderedVariants.length == 1) {
+      unawaited(_play(orderedVariants.first));
       return;
     }
 
@@ -545,10 +666,10 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
           width: 520,
           child: ListView.separated(
             shrinkWrap: true,
-            itemCount: group.channels.length,
+            itemCount: orderedVariants.length,
             separatorBuilder: (_, __) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
-              final channel = group.channels[index];
+              final channel = orderedVariants[index];
               return Row(
                 textDirection: TextDirection.rtl,
                 children: [
@@ -562,7 +683,34 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
                           color: Colors.white.withOpacity(.05),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Text(channel.name, textAlign: TextAlign.right),
+                        child: Row(
+                          textDirection: TextDirection.rtl,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                channel.name,
+                                textAlign: TextAlign.right,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: TvColors.red.withOpacity(.14),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                _qualityLabel(channel.name),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -595,11 +743,10 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
   }
 
   Future<void> _play(TvChannel tapped) async {
-    final group = _groups.firstWhere(
-      (group) => group.channels.any((channel) => channel.id == tapped.id),
-      orElse: () => _ChannelGroup(tapped.groupKey, [tapped]),
-    );
-    final playback = _smoothVariantFor(group.channels);
+    final variants = _allChannels
+        .where((channel) => channel.groupKey == tapped.groupKey && !_isIntro(channel.name))
+        .toList(growable: false);
+    final playback = tapped;
     final playlist = _groups.map((g) => _smoothVariantFor(g.channels)).toList(growable: false);
     final index = playlist.indexWhere((channel) => channel.groupKey == playback.groupKey);
 
@@ -639,7 +786,6 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
       if (channel == null) {
         final seenCategoryIds = <String>{};
         final categories = <TvCategory>[
-          ..._visibleCategories,
           ..._allCategories,
         ].where((category) => seenCategoryIds.add(category.id)).toList(growable: false);
         if (BeinChannelResolver.isBeinLabel(broadcast)) {
@@ -767,7 +913,7 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
     return AnimatedBuilder(
       animation: tvChannelFavorites,
       builder: (context, _) {
-        final categories = _visibleCategories;
+        final categories = _qualitySections;
         final favorites = tvChannelFavorites.items;
         final groups = _groups;
 
@@ -810,26 +956,6 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
                             style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
                           ),
                         ),
-                        ..._servers.map((server) {
-                          final selected = _server == server;
-                          return Padding(
-                            padding: const EdgeInsets.only(left: 8),
-                            child: TvFocus(
-                              onPressed: () => _selectServer(server),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
-                                decoration: BoxDecoration(
-                                  color: selected ? TvColors.red : Colors.white.withOpacity(.06),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Text(
-                                  'سيرفر $server',
-                                  style: const TextStyle(fontWeight: FontWeight.w900),
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
                       ],
                     ),
                   ),
@@ -900,7 +1026,7 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
                           final category = categories[index];
                           final selected = _selectedId == category.id;
                           return TvFocus(
-                            onPressed: () => _select(category),
+                            onPressed: () => _selectQuality(category),
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                               decoration: BoxDecoration(
@@ -2290,6 +2416,13 @@ class _HeroLoading extends StatelessWidget {
       ),
     );
   }
+}
+
+class _QualitySection {
+  const _QualitySection(this.id, this.name);
+
+  final String id;
+  final String name;
 }
 
 class _ChannelGroup {

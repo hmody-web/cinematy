@@ -40,6 +40,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
   Future<List<SeasonGroup>>? _seasons;
   Future<List<MediaItem>>? _recommendations;
   bool _moreInfo = false;
+  final ScrollController _detailsScrollController = ScrollController();
 
   @override
   void initState() {
@@ -53,6 +54,12 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
     _details = api.details(_entryItem.id);
     _recommendations = api.recommendations(_entryItem.id).catchError((_) => <MediaItem>[]);
     _prepareSeasons();
+  }
+
+  @override
+  void dispose() {
+    _detailsScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _prepareSeasons() async {
@@ -157,6 +164,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
           }
 
           return CustomScrollView(
+            controller: _detailsScrollController,
             physics: const BouncingScrollPhysics(),
             slivers: [
               SliverToBoxAdapter(
@@ -235,6 +243,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                     onDownloadSeason: (episodes) => _downloadSeason(media, episodes),
                     initialSeason: _resumeSeason,
                     initialEpisode: _resumeEpisode,
+                    scrollController: _detailsScrollController,
                   ),
                 ),
               ],
@@ -1161,12 +1170,42 @@ class _TvSeasonsPanel extends ConsumerStatefulWidget {
 }
 
 class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
+  static const int _episodeBatchSize = 30;
+
   int _selected = 0;
   bool _didApplyInitial = false;
+  int _visibleEpisodeCount = _episodeBatchSize;
+  int? _visibleSeasonNumber;
+  int _totalEpisodeCount = 0;
   final ScrollController _episodeController = ScrollController();
 
   @override
+  void initState() {
+    super.initState();
+    _episodeController.addListener(_handleEpisodeScroll);
+  }
+
+  void _handleEpisodeScroll() {
+    if (!_episodeController.hasClients) return;
+    final position = _episodeController.position;
+    if (position.extentAfter < 900 && _visibleEpisodeCount < _totalEpisodeCount) {
+      setState(() {
+        _visibleEpisodeCount = (_visibleEpisodeCount + _episodeBatchSize).clamp(0, _totalEpisodeCount).toInt();
+      });
+    }
+  }
+
+  void _resetVisibleEpisodes(int seasonNumber) {
+    _visibleSeasonNumber = seasonNumber;
+    _visibleEpisodeCount = _episodeBatchSize;
+    if (_episodeController.hasClients) {
+      _episodeController.jumpTo(0);
+    }
+  }
+
+  @override
   void dispose() {
+    _episodeController.removeListener(_handleEpisodeScroll);
     _episodeController.dispose();
     super.dispose();
   }
@@ -1198,6 +1237,18 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
         }
         if (_selected >= seasons.length) _selected = 0;
         final current = seasons[_selected];
+        if (_visibleSeasonNumber != current.number) {
+          _visibleSeasonNumber = current.number;
+          _visibleEpisodeCount = _episodeBatchSize;
+        }
+        if (widget.initialSeason == current.number && widget.initialEpisode != null) {
+          final resumeIndex = current.episodes.indexWhere((episode) => episode.episodeNumber == widget.initialEpisode);
+          if (resumeIndex >= 0 && resumeIndex >= _visibleEpisodeCount) {
+            _visibleEpisodeCount = ((resumeIndex + 1 + _episodeBatchSize - 1) ~/ _episodeBatchSize) * _episodeBatchSize;
+          }
+        }
+        _totalEpisodeCount = current.episodes.length;
+        final visibleEpisodes = current.episodes.take(_visibleEpisodeCount).toList(growable: false);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1211,7 +1262,10 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
                 itemBuilder: (_, i) => ChoiceChip(
                   selected: i == _selected,
                   label: Text('الموسم ${seasons[i].number}'),
-                  onSelected: (_) => setState(() => _selected = i),
+                  onSelected: (_) => setState(() {
+                    _selected = i;
+                    _resetVisibleEpisodes(seasons[i].number);
+                  }),
                   labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
                 ),
@@ -1229,10 +1283,10 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
               child: ListView.separated(
                 controller: _episodeController,
                 scrollDirection: Axis.horizontal,
-                itemCount: current.episodes.length,
+                itemCount: visibleEpisodes.length,
                 separatorBuilder: (_, __) => const SizedBox(width: 16),
                 itemBuilder: (_, i) {
-                  final ep = current.episodes[i];
+                  final ep = visibleEpisodes[i];
                   return _TvEpisodeCard(
                     episode: ep,
                     fallbackImage: widget.media.backdropUrl,
@@ -1712,6 +1766,7 @@ class _SeasonsView extends ConsumerStatefulWidget {
     required this.onDownloadSeason,
     this.initialSeason,
     this.initialEpisode,
+    required this.scrollController,
   });
   final Future<List<SeasonGroup>> future;
   final MediaItem media;
@@ -1721,14 +1776,65 @@ class _SeasonsView extends ConsumerStatefulWidget {
   final ValueChanged<List<Episode>> onDownloadSeason;
   final int? initialSeason;
   final int? initialEpisode;
+  final ScrollController scrollController;
 
   @override
   ConsumerState<_SeasonsView> createState() => _SeasonsViewState();
 }
 
 class _SeasonsViewState extends ConsumerState<_SeasonsView> {
+  static const int _episodeBatchSize = 30;
+
   int _selected = 0;
   bool _didApplyInitial = false;
+  int _visibleEpisodeCount = _episodeBatchSize;
+  int? _visibleSeasonNumber;
+  int _totalEpisodeCount = 0;
+  final GlobalKey _loadMoreKey = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.scrollController.addListener(_handleParentScroll);
+  }
+
+  @override
+  void didUpdateWidget(covariant _SeasonsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scrollController != widget.scrollController) {
+      oldWidget.scrollController.removeListener(_handleParentScroll);
+      widget.scrollController.addListener(_handleParentScroll);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.scrollController.removeListener(_handleParentScroll);
+    super.dispose();
+  }
+
+  void _handleParentScroll() {
+    if (!mounted || _loadMoreKey.currentContext == null) return;
+    final renderObject = _loadMoreKey.currentContext!.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return;
+    final dy = renderObject.localToGlobal(Offset.zero).dy;
+    final viewportHeight = MediaQuery.sizeOf(context).height;
+    if (dy <= viewportHeight + 420) {
+      _loadNextEpisodeBatch();
+    }
+  }
+
+  void _loadNextEpisodeBatch() {
+    if (_visibleEpisodeCount >= _totalEpisodeCount) return;
+    setState(() {
+      _visibleEpisodeCount = (_visibleEpisodeCount + _episodeBatchSize).clamp(0, _totalEpisodeCount).toInt();
+    });
+  }
+
+  void _resetVisibleEpisodes(int seasonNumber) {
+    _visibleSeasonNumber = seasonNumber;
+    _visibleEpisodeCount = _episodeBatchSize;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1771,6 +1877,18 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
         }
         if (_selected >= seasons.length) _selected = 0;
         final current = seasons[_selected];
+        if (_visibleSeasonNumber != current.number) {
+          _resetVisibleEpisodes(current.number);
+        }
+        if (widget.initialSeason == current.number && widget.initialEpisode != null) {
+          final resumeIndex = current.episodes.indexWhere((episode) => episode.episodeNumber == widget.initialEpisode);
+          if (resumeIndex >= 0 && resumeIndex >= _visibleEpisodeCount) {
+            _visibleEpisodeCount = ((resumeIndex + 1 + _episodeBatchSize - 1) ~/ _episodeBatchSize) * _episodeBatchSize;
+          }
+        }
+        _totalEpisodeCount = current.episodes.length;
+        final visibleEpisodes = current.episodes.take(_visibleEpisodeCount).toList(growable: false);
+        final hasMoreEpisodes = visibleEpisodes.length < current.episodes.length;
 
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SizedBox(
@@ -1781,7 +1899,14 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
               itemCount: seasons.length,
               itemBuilder: (_, i) => Padding(
                 padding: const EdgeInsets.only(left: 8),
-                child: ChoiceChip(selected: i == _selected, label: Text('الموسم ${seasons[i].number}'), onSelected: (_) => setState(() => _selected = i)),
+                child: ChoiceChip(
+                  selected: i == _selected,
+                  label: Text('الموسم ${seasons[i].number}'),
+                  onSelected: (_) => setState(() {
+                    _selected = i;
+                    _resetVisibleEpisodes(seasons[i].number);
+                  }),
+                ),
               ),
             ),
           ),
@@ -1793,7 +1918,7 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
               label: Text(seasons.length == 1 ? 'تنزيل كل الحلقات' : 'تنزيل كل حلقات الموسم ${current.number}'),
             ),
           ),
-          ...current.episodes.take(80).map((episode) {
+          ...visibleEpisodes.map((episode) {
             final downloaded = downloads.isDownloaded(episode.id);
             final downloading = downloads.isDownloading(episode.id);
             final progress = downloads.progressOf(episode.id);
@@ -1884,6 +2009,18 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
               ),
             );
           }),
+          if (hasMoreEpisodes)
+            Padding(
+              key: _loadMoreKey,
+              padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2.4),
+                ),
+              ),
+            )
         ]);
       },
     );

@@ -96,6 +96,47 @@ class XtreamTvService {
         .toList(growable: false);
   }
 
+  /// مكتبة المسلسلات من نفس Xtream المصدر المستخدم لقنوات التلفاز.
+  Future<List<Map<String, dynamic>>> getSeriesCatalog() async {
+    _ensureConfigured();
+    final response = await _dio.get<dynamic>(
+      _endpoint,
+      queryParameters: _query('get_series'),
+    );
+    return _asList(response.data)
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+  }
+
+  /// تفاصيل مسلسل Xtream، وتشمل عادةً info + seasons + episodes.
+  Future<Map<String, dynamic>> getSeriesInfo(String seriesId) async {
+    _ensureConfigured();
+    final response = await _dio.get<dynamic>(
+      _endpoint,
+      queryParameters: _query('get_series_info', {'series_id': seriesId}),
+    );
+    final data = response.data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return const <String, dynamic>{};
+  }
+
+  /// يحول أي مسار ترجمة/وسائط يعيده Xtream إلى رابط كامل على نفس السيرفر.
+  String absoluteMediaUrl(String value) {
+    final raw = value.trim();
+    if (raw.isEmpty) return '';
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
+    final base = config.server.replaceAll(RegExp(r'/+$'), '');
+    if (raw.startsWith('/')) return '$base$raw';
+    return '$base/$raw';
+  }
+
+  /// رابط تشغيل حلقة مسلسل من نفس حساب Xtream.
+  String seriesEpisodeUrl({required String episodeId, String extension = 'mp4'}) {
+    final ext = extension.trim().isEmpty ? 'mp4' : extension.trim().replaceFirst(RegExp(r'^\.'), '');
+    return '${config.server.replaceAll(RegExp(r'/+$'), '')}/series/${Uri.encodeComponent(config.username)}/${Uri.encodeComponent(config.password)}/${Uri.encodeComponent(episodeId)}.$ext';
+  }
+
   String streamUrl(TvChannel channel) =>
       '${config.server.replaceAll(RegExp(r'/+$'), '')}/live/${Uri.encodeComponent(config.username)}/${Uri.encodeComponent(config.password)}/${channel.id}.ts';
 

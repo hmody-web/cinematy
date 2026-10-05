@@ -5,14 +5,18 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/content_details.dart';
+import '../../data/models/content_source.dart';
 import '../../data/models/episode.dart';
 import '../../data/models/media_item.dart';
 import '../../data/models/video_source.dart';
 import '../../providers.dart';
+import '../../data/services/cinemana_api.dart';
+import '../../data/services/source_aware_api.dart';
 import '../../widgets/app_notice.dart';
 import '../../widgets/imdb_badge.dart';
 import '../../widgets/media_card.dart';
@@ -36,6 +40,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
   late final MediaItem _entryItem;
   late final int? _resumeSeason;
   late final int? _resumeEpisode;
+  late final CinemanaApi _detailsApi;
   late Future<ContentDetails> _details;
   Future<List<SeasonGroup>>? _seasons;
   Future<List<MediaItem>>? _recommendations;
@@ -50,10 +55,25 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
     _resumeSeason = resumingEpisode ? widget.item.season : null;
     _resumeEpisode = resumingEpisode ? widget.item.episode : null;
 
-    final api = ref.read(apiProvider);
-    _details = api.details(_entryItem.id);
-    _recommendations = api.recommendations(_entryItem.id).catchError((_) => <MediaItem>[]);
+    _detailsApi = _apiForEntryItem();
+    final detailId = _sourceUrlOf(_entryItem);
+    _details = _detailsApi.details(detailId, refresh: true);
+    _recommendations = _detailsApi.recommendations(detailId).catchError((_) => <MediaItem>[]);
     _prepareSeasons();
+  }
+
+  String _sourceUrlOf(MediaItem item) {
+    final raw = (item.raw['_sourceUrl'] ?? '').toString().trim();
+    return raw.isNotEmpty ? raw : item.id;
+  }
+
+  CinemanaApi _apiForEntryItem() {
+    final sourceId = (_entryItem.raw['_source'] ?? '').toString().trim();
+    if (sourceId == 'akwam') {
+      final akwam = builtInContentSources.firstWhere((source) => source.id == 'akwam');
+      return SourceAwareApi(source: akwam);
+    }
+    return ref.read(apiProvider);
   }
 
   @override
@@ -63,14 +83,49 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
   }
 
   Future<void> _prepareSeasons() async {
-    if (!_entryItem.isSeries) return;
-    final api = ref.read(apiProvider);
+    final api = _detailsApi;
+    final entrySource = (_entryItem.raw['_source'] ?? '').toString().trim();
+
+    // Akwam's series page already contains the full episode list. Fetch it
+    // immediately from the original /series/... URL and do not gate it on the
+    // separate details request. This also makes the episode failure visible in
+    // the console instead of silently returning an empty list.
+    if (entrySource == 'akwam') {
+      _seasons = () async {
+        try {
+          final seasons = await api.seasonsFor(_entryItem);
+          final episodeCount = seasons.fold<int>(
+            0,
+            (sum, season) => sum + season.episodes.length,
+          );
+          debugPrint(
+            '[AKWAM] direct seasons: ${seasons.length} season(s), '
+            '$episodeCount episode(s)',
+          );
+          return seasons;
+        } catch (error, stack) {
+          debugPrint('[AKWAM] direct seasons failed: $error');
+          debugPrintStack(stackTrace: stack);
+          return <SeasonGroup>[];
+        }
+      }();
+      if (mounted) setState(() {});
+      return;
+    }
+
     _seasons = () async {
       try {
         final details = await _details;
-        return api.seasonsFor(details.media.id.isNotEmpty ? details.media : _entryItem, detailsRaw: details.media.raw);
+        final media = details.media.id.isNotEmpty ? details.media : _entryItem;
+        if (!_entryItem.isSeries && !media.isSeries) {
+          return <SeasonGroup>[];
+        }
+        return api.seasonsFor(media, detailsRaw: media.raw);
       } catch (_) {
-        return api.seasonsFor(_entryItem);
+        if (_entryItem.isSeries) {
+          return api.seasonsFor(_entryItem);
+        }
+        return <SeasonGroup>[];
       }
     }();
     if (mounted) setState(() {});
@@ -103,6 +158,22 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
           final downloaded = downloads.isDownloaded(media.id);
           final downloading = downloads.isDownloading(media.id);
           final downloadProgress = downloads.progressOf(media.id);
+
+          // Always anchor the episode rails to the most recently watched episode
+          // of this series. This also updates immediately after returning from
+          // the player because LibraryStore notifies this screen when progress is
+          // persisted.
+          int? listInitialSeason = _resumeSeason;
+          int? listInitialEpisode = _resumeEpisode;
+          if (media.isSeries) {
+            for (final candidate in library.continueWatching()) {
+              if (!candidate.isEpisodeResume) continue;
+              if (candidate.seriesRootForResume.id != media.id) continue;
+              listInitialSeason = candidate.season;
+              listInitialEpisode = candidate.episode;
+              break;
+            }
+          }
           // Cinemana's native app uses the full imgObjURL image for immersive
           // artwork. Prefer the full backdrop from videoInfo and only fall
           // back to thumbnails if no full image exists.
@@ -152,8 +223,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                   _startWatchParty(_episodeMedia(media, episode)),
               onDownloadEpisode: (episode) => _downloadEpisode(media, episode),
               onDownloadSeason: (episodes) => _downloadSeason(media, episodes),
-              initialSeason: _resumeSeason,
-              initialEpisode: _resumeEpisode,
+              initialSeason: listInitialSeason,
+              initialEpisode: listInitialEpisode,
               onOpenActor: (person) => Navigator.of(context).push(
                 CinematyPageRoute(builder: (_) => ActorScreen(person: person)),
               ),
@@ -241,8 +312,8 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
                         _startWatchParty(_episodeMedia(media, episode)),
                     onDownloadEpisode: (episode) => _downloadEpisode(media, episode),
                     onDownloadSeason: (episodes) => _downloadSeason(media, episodes),
-                    initialSeason: _resumeSeason,
-                    initialEpisode: _resumeEpisode,
+                    initialSeason: listInitialSeason,
+                    initialEpisode: listInitialEpisode,
                     scrollController: _detailsScrollController,
                   ),
                 ),
@@ -325,7 +396,47 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
     }
   }
 
+  bool _isExternalOfficial(MediaItem media) => media.raw['_externalOfficial'] == true;
+
+  String _officialUrlOf(MediaItem media) =>
+      media.raw['_officialUrl']?.toString().trim() ?? '';
+
+  Future<void> _openOfficial(MediaItem media) async {
+    final value = _officialUrlOf(media);
+    final uri = Uri.tryParse(value);
+    if (uri == null || value.isEmpty) {
+      if (mounted) {
+        AppNotice.show(
+          context,
+          title: 'تعذر فتح المصدر الرسمي',
+          message: 'رابط المصدر الرسمي غير متوفر حالياً.',
+          type: AppNoticeType.error,
+        );
+      }
+      return;
+    }
+
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && mounted) {
+      AppNotice.show(
+        context,
+        title: 'تعذر فتح المصدر الرسمي',
+        message: 'لم يتمكن النظام من فتح الرابط.',
+        type: AppNoticeType.error,
+      );
+    }
+  }
+
   Future<void> _showDownloadQuality(MediaItem media) async {
+    if (_isExternalOfficial(media)) {
+      AppNotice.show(
+        context,
+        title: 'التنزيل من المصدر الرسمي',
+        message: 'التنزيل لهذا العمل يتم من خلال تطبيق المصدر الرسمي عند توفره في اشتراكك.',
+        type: AppNoticeType.info,
+      );
+      return;
+    }
     try {
       final sources = await ref.read(apiProvider).videoSources(media.id);
       if (!mounted) return;
@@ -452,6 +563,10 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
 
   void _play(MediaItem media, {Episode? episode}) {
     final target = episode == null ? media : _episodeMedia(media, episode);
+    if (_isExternalOfficial(target)) {
+      _openOfficial(target);
+      return;
+    }
     Navigator.of(context).push(CinematyPageRoute(builder: (_) => PlayerScreen(media: target)));
   }
 }
@@ -1185,6 +1300,17 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
     _episodeController.addListener(_handleEpisodeScroll);
   }
 
+  @override
+  void didUpdateWidget(covariant _TvSeasonsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialSeason != widget.initialSeason ||
+        oldWidget.initialEpisode != widget.initialEpisode) {
+      _didApplyInitial = false;
+      _visibleEpisodeCount = _episodeBatchSize;
+      _visibleSeasonNumber = null;
+    }
+  }
+
   void _handleEpisodeScroll() {
     if (!_episodeController.hasClients) return;
     final position = _episodeController.position;
@@ -1241,14 +1367,20 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
           _visibleSeasonNumber = current.number;
           _visibleEpisodeCount = _episodeBatchSize;
         }
+        var orderedEpisodes = current.episodes;
         if (widget.initialSeason == current.number && widget.initialEpisode != null) {
-          final resumeIndex = current.episodes.indexWhere((episode) => episode.episodeNumber == widget.initialEpisode);
-          if (resumeIndex >= 0 && resumeIndex >= _visibleEpisodeCount) {
-            _visibleEpisodeCount = ((resumeIndex + 1 + _episodeBatchSize - 1) ~/ _episodeBatchSize) * _episodeBatchSize;
+          final resumeIndex = current.episodes.indexWhere(
+            (episode) => episode.episodeNumber == widget.initialEpisode,
+          );
+          if (resumeIndex > 0) {
+            orderedEpisodes = <Episode>[
+              ...current.episodes.sublist(resumeIndex),
+              ...current.episodes.sublist(0, resumeIndex),
+            ];
           }
         }
-        _totalEpisodeCount = current.episodes.length;
-        final visibleEpisodes = current.episodes.take(_visibleEpisodeCount).toList(growable: false);
+        _totalEpisodeCount = orderedEpisodes.length;
+        final visibleEpisodes = orderedEpisodes.take(_visibleEpisodeCount).toList(growable: false);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1805,6 +1937,12 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
       oldWidget.scrollController.removeListener(_handleParentScroll);
       widget.scrollController.addListener(_handleParentScroll);
     }
+    if (oldWidget.initialSeason != widget.initialSeason ||
+        oldWidget.initialEpisode != widget.initialEpisode) {
+      _didApplyInitial = false;
+      _visibleEpisodeCount = _episodeBatchSize;
+      _visibleSeasonNumber = null;
+    }
   }
 
   @override
@@ -1880,15 +2018,21 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
         if (_visibleSeasonNumber != current.number) {
           _resetVisibleEpisodes(current.number);
         }
+        var orderedEpisodes = current.episodes;
         if (widget.initialSeason == current.number && widget.initialEpisode != null) {
-          final resumeIndex = current.episodes.indexWhere((episode) => episode.episodeNumber == widget.initialEpisode);
-          if (resumeIndex >= 0 && resumeIndex >= _visibleEpisodeCount) {
-            _visibleEpisodeCount = ((resumeIndex + 1 + _episodeBatchSize - 1) ~/ _episodeBatchSize) * _episodeBatchSize;
+          final resumeIndex = current.episodes.indexWhere(
+            (episode) => episode.episodeNumber == widget.initialEpisode,
+          );
+          if (resumeIndex > 0) {
+            orderedEpisodes = <Episode>[
+              ...current.episodes.sublist(resumeIndex),
+              ...current.episodes.sublist(0, resumeIndex),
+            ];
           }
         }
-        _totalEpisodeCount = current.episodes.length;
-        final visibleEpisodes = current.episodes.take(_visibleEpisodeCount).toList(growable: false);
-        final hasMoreEpisodes = visibleEpisodes.length < current.episodes.length;
+        _totalEpisodeCount = orderedEpisodes.length;
+        final visibleEpisodes = orderedEpisodes.take(_visibleEpisodeCount).toList(growable: false);
+        final hasMoreEpisodes = visibleEpisodes.length < orderedEpisodes.length;
 
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SizedBox(

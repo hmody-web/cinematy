@@ -30,8 +30,11 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
   final SportsMatchHeroService _heroService = SportsMatchHeroService();
 
   List<TvCategory> _allCategories = const [];
+  Set<String> _introCategoryIds = const <String>{};
+  Map<String, String> _categoryNameById = const <String, String>{};
   List<TvChannel> _channels = const [];
   List<TvChannel> _allChannels = const [];
+  List<_ChannelGroup> _cachedGroups = const [];
   String? _selectedId;
   bool _loading = true;
   String? _error;
@@ -53,14 +56,11 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
   void initState() {
     super.initState();
     tvDisplayPreferences.addListener(_onDisplayPreferencesChanged);
+    // Load the channel surface first. Hero artwork is deliberately deferred
+    // until the large Xtream list has been prepared and painted once; doing
+    // both at startup can spike CPU/RAM on Android TV and make the OS kill it.
     _load();
-
-    // When the user hides the scoreboard, do not spend API/network work
-    // preparing hero artwork in the background.
-    if (!tvDisplayPreferences.hideScoreboard) {
-      _loadHero();
-      _startHeroRefreshTimer();
-    } else {
+    if (tvDisplayPreferences.hideScoreboard) {
       _heroLoading = false;
     }
   }
@@ -399,12 +399,10 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
   ];
 
   String _channelQualityKey(TvChannel channel) {
-    final categoryName = _allCategories
-        .where((category) => category.id == channel.categoryId)
-        .map((category) => category.name)
-        .cast<String?>()
-        .firstWhere((_) => true, orElse: () => null);
-    final value = '${channel.name} ${categoryName ?? ''}'.toLowerCase();
+    // O(1) category lookup; quality switching must never scan the full
+    // category list once per channel.
+    final categoryName = _categoryNameById[channel.categoryId] ?? '';
+    final value = '${channel.name} $categoryName'.toLowerCase();
 
     // Dedicated 4K section, separate from HEVC.
     if (value.contains('4k') ||
@@ -427,18 +425,19 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
   }
 
   List<TvChannel> _channelsForSection(String sectionId) {
-    final source = _allChannels.where((channel) {
-      if (_isIntro(channel.name)) return false;
-      final category = _allCategories
-          .where((item) => item.id == channel.categoryId)
-          .map((item) => item.name)
-          .cast<String?>()
-          .firstWhere((_) => true, orElse: () => null);
-      return category == null || !_isIntro(category);
-    });
-    if (sectionId == '__all__') return source.toList(growable: false);
-    return source
-        .where((channel) => _channelQualityKey(channel) == sectionId)
+    // O(n) filtering only. The old implementation searched the complete
+    // category list for EVERY channel (O(channels × categories)), which is
+    // disastrous once all sports/entertainment groups are unified.
+    if (sectionId == '__all__') {
+      return _allChannels
+          .where((channel) => !_introCategoryIds.contains(channel.categoryId))
+          .toList(growable: false);
+    }
+
+    return _allChannels
+        .where((channel) =>
+            !_introCategoryIds.contains(channel.categoryId) &&
+            _channelQualityKey(channel) == sectionId)
         .toList(growable: false);
   }
 
@@ -452,14 +451,36 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
         _service.getCategories(),
         _service.getChannels(),
       ]);
-      _allCategories = (results[0] as List<TvCategory>)
+      final rawCategories = results[0] as List<TvCategory>;
+      _introCategoryIds = rawCategories
+          .where((category) => _isIntro(category.name))
+          .map((category) => category.id)
+          .toSet();
+      _allCategories = rawCategories
           .where((category) => !_isIntro(category.name))
           .toList(growable: false);
+      _categoryNameById = <String, String>{
+        for (final category in _allCategories) category.id: category.name,
+      };
       _allChannels = (results[1] as List<TvChannel>)
-          .where((channel) => !_isIntro(channel.name))
+          .where((channel) =>
+              !_isIntro(channel.name) &&
+              !_introCategoryIds.contains(channel.categoryId))
           .toList(growable: false);
+
       await _selectFirstCategory();
-      if (mounted) setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() => _loading = false);
+
+      // Give the first channel grid frame time to reach the TV compositor
+      // before starting scoreboard HTTP calls and large artwork decoding.
+      if (!tvDisplayPreferences.hideScoreboard) {
+        Future<void>.delayed(const Duration(milliseconds: 850), () async {
+          if (!mounted || tvDisplayPreferences.hideScoreboard) return;
+          await _loadHero();
+          if (mounted) _startHeroRefreshTimer();
+        });
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -482,48 +503,66 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
     try {
       final channels = _channelsForSection(section.id);
       if (!mounted) return;
+      final groups = await _buildGroups(channels);
       setState(() {
         _channels = channels;
+        _cachedGroups = groups;
         _loading = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _channels = const [];
+        _cachedGroups = const [];
         _loading = false;
       });
     }
   }
 
-  List<_ChannelGroup> get _groups {
+  List<_ChannelGroup> get _groups => _cachedGroups;
+
+  Future<List<_ChannelGroup>> _buildGroups(List<TvChannel> channels) async {
     final map = <String, List<TvChannel>>{};
-    for (final channel in _channels) {
+
+    // Build in small chunks and yield to Flutter. This keeps remote input,
+    // animations and the watchdog responsive even with very large playlists.
+    for (var i = 0; i < channels.length; i++) {
+      final channel = channels[i];
       final key = channel.groupKey.isEmpty ? '${channel.id}' : channel.groupKey;
       map.putIfAbsent(key, () => <TvChannel>[]).add(channel);
+      if (i > 0 && i % 300 == 0) {
+        await Future<void>.delayed(Duration.zero);
+        if (!mounted) return const <_ChannelGroup>[];
+      }
     }
-    final groups = map.entries
-        .map((entry) => _ChannelGroup(entry.key, entry.value))
-        .toList(growable: false)
-      ..sort((a, b) {
-        // IMPORTANT: sort by the REAL stream names inside the group, not
-        // by the cleaned display title. This keeps Qatar beIN 1..9 pinned
-        // first in "الكل" and in every quality section independently.
-        final aPriority = _qatariBeinGroupPriority(a);
-        final bPriority = _qatariBeinGroupPriority(b);
 
-        if (aPriority != null && bPriority != null) {
-          final order = aPriority.compareTo(bPriority);
-          if (order != 0) return order;
-        } else if (aPriority != null) {
-          return -1;
-        } else if (bPriority != null) {
-          return 1;
-        }
+    // Do NOT alphabetically sort thousands of groups. We only need the Qatar
+    // beIN block pinned first; preserving Xtream/server order for everything
+    // else is both stable and dramatically cheaper on TV hardware.
+    final pinned = <MapEntry<int, _ChannelGroup>>[];
+    final rest = <_ChannelGroup>[];
+    var index = 0;
+    for (final entry in map.entries) {
+      final group = _ChannelGroup(entry.key, entry.value);
+      final priority = _qatariBeinGroupPriority(group);
+      if (priority != null) {
+        // include original position as a deterministic tie-breaker
+        pinned.add(MapEntry(priority * 100000 + index, group));
+      } else {
+        rest.add(group);
+      }
+      index++;
+      if (index % 300 == 0) {
+        await Future<void>.delayed(Duration.zero);
+        if (!mounted) return const <_ChannelGroup>[];
+      }
+    }
 
-        return _normalizeChannelName(a.title)
-            .compareTo(_normalizeChannelName(b.title));
-      });
-    return groups;
+    pinned.sort((a, b) => a.key.compareTo(b.key));
+    return List<_ChannelGroup>.unmodifiable(<_ChannelGroup>[
+      ...pinned.map((entry) => entry.value),
+      ...rest,
+    ]);
   }
 
   int _channelOrder(String value) {
@@ -922,7 +961,7 @@ class _TvLiveScreenState extends State<TvLiveScreen> {
             final heroHeight = constraints.maxHeight.clamp(460.0, 980.0).toDouble();
             return CustomScrollView(
               controller: _pageScrollController,
-              cacheExtent: 900,
+              cacheExtent: 280,
               slivers: [
                 if (!tvDisplayPreferences.hideScoreboard &&
                     (_heroLoading || _heroes.isNotEmpty))

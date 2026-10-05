@@ -31,6 +31,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
     this.onBack,
     this.brandGlassProgress = 0,
     this.brandOpacity = 1,
+    this.onBrandLongPress,
+    this.activeSourceId = 'cinemana',
   });
 
   final String? section;
@@ -41,6 +43,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback? onBack;
   final double brandGlassProgress;
   final double brandOpacity;
+  final VoidCallback? onBrandLongPress;
+  final String activeSourceId;
 
   @override
   Size get preferredSize => Size.fromHeight(kIsWeb ? 92 : 74);
@@ -74,6 +78,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
           onBack: onBack,
           brandGlassProgress: brandGlassProgress,
           brandOpacity: brandOpacity,
+          onBrandLongPress: onBrandLongPress,
+          activeSourceId: activeSourceId,
         ),
       );
 }
@@ -89,6 +95,8 @@ class CinematyTopBarContent extends StatelessWidget {
     this.onBack,
     this.brandGlassProgress = 0,
     this.brandOpacity = 1,
+    this.onBrandLongPress,
+    this.activeSourceId = 'cinemana',
   });
 
   final String? section;
@@ -99,6 +107,8 @@ class CinematyTopBarContent extends StatelessWidget {
   final VoidCallback? onBack;
   final double brandGlassProgress;
   final double brandOpacity;
+  final VoidCallback? onBrandLongPress;
+  final String activeSourceId;
 
   @override
   Widget build(BuildContext context) {
@@ -130,9 +140,18 @@ class CinematyTopBarContent extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _BrandGlass(
-                    progress: brandGlassProgress.clamp(0.0, 1.0),
-                    child: BrandLogo(size: kIsWeb ? 48 : 38),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onLongPress: onBrandLongPress,
+                    child: _BrandGlass(
+                      progress: brandGlassProgress.clamp(0.0, 1.0),
+                      child: BrandLogo(
+                        size: kIsWeb ? 48 : 38,
+                        logoBadge: activeSourceId == 'akwam'
+                            ? _AkwamSourceBadge(size: kIsWeb ? 20 : 17)
+                            : null,
+                      ),
+                    ),
                   ),
                   if (section != null && section!.trim().isNotEmpty) ...[
                     const SizedBox(width: 10),
@@ -167,6 +186,41 @@ class CinematyTopBarContent extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+
+class _AkwamSourceBadge extends StatelessWidget {
+  const _AkwamSourceBadge({required this.size});
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      padding: const EdgeInsets.all(1.5),
+      decoration: BoxDecoration(
+        color: const Color(0xFF050505),
+        borderRadius: BorderRadius.circular(size * .33),
+        border: Border.all(color: Colors.white.withOpacity(.82), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(.55),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(size * .25),
+        child: Image.asset(
+          'assets/branding/akwam_logo.webp',
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.medium,
+        ),
       ),
     );
   }

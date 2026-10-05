@@ -13,6 +13,7 @@ import '../models/episode.dart';
 import '../models/media_item.dart';
 import '../models/network_access_state.dart';
 import '../models/video_source.dart';
+import '../../features/tv/xtream_tv_service.dart';
 
 class CinemanaApi {
   CinemanaApi();
@@ -38,6 +39,15 @@ class CinemanaApi {
   // langNb المرتبط بكل Category كما يعيده تطبيق Cinemana داخل langArray.
   // هذا الحقل مهم جداً لطلب /video/V/2 ولا يجوز إسقاطه.
   final Map<String, String> _categoryLanguageIds = <String, String>{};
+
+  // نفس Xtream المستخدم في قسم التلفاز. لا توجد بيانات حساب مكررة هنا.
+  final XtreamTvService _xtream = XtreamTvService();
+  List<Map<String, dynamic>>? _xtreamSeriesCatalogMemory;
+  DateTime? _xtreamSeriesCatalogFetchedAt;
+  final Map<String, Map<String, dynamic>> _xtreamSeriesInfoMemory = <String, Map<String, dynamic>>{};
+
+  static const String _xtreamSeriesPrefix = 'xtream_series|';
+  static const String _xtreamEpisodePrefix = 'xtream_episode|';
 
   Dio _dioFor(String baseUrl) => Dio(
         BaseOptions(
@@ -582,7 +592,27 @@ class CinemanaApi {
       }),
     );
 
-    return _rankSearch(_unique(batches.expand((e) => e).toList()), q);
+    final cinemanaResults = _rankSearch(_unique(batches.expand((e) => e).toList()), q);
+
+    // «حب ع ورق» مطلوب من نفس Xtream الخاص بـ Cinema Max / قسم التلفاز.
+    // لا نضيفه إلى الرئيسية؛ نستعلم من Xtream فقط عندما يكون نص البحث مناسباً.
+    if (_looksLikeHobAlaWaraq(q)) {
+      try {
+        final xtreamMatches = await _searchXtreamHobAlaWaraq();
+        if (xtreamMatches.isNotEmpty) {
+          return <MediaItem>[
+            ...xtreamMatches,
+            ...cinemanaResults.where((e) => !_looksLikeHobAlaWaraq(e.title)),
+          ];
+        }
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint('[Cinematy API] Xtream series search unavailable: ${_shortError(error)}');
+        }
+      }
+    }
+
+    return cinemanaResults;
   }
 
   /// نفس طلب تطبيق Cinemana حرفياً تقريباً، لكن ندعم .com و .cc معاً.
@@ -1168,6 +1198,12 @@ class CinemanaApi {
   }
 
   Future<ContentDetails> details(String id, {bool refresh = false}) async {
+    if (_isXtreamSeriesId(id)) {
+      final seriesId = _stripXtreamSeriesId(id);
+      final raw = await _xtreamSeriesInfo(seriesId, refresh: refresh);
+      return ContentDetails.fromJson(_xtreamDetailsMap(seriesId, raw));
+    }
+
     final raw = await _get(
       CinemanaRoutes.videoInfo(id),
       ttl: AppConfig.detailsCacheTtl,
@@ -1179,6 +1215,10 @@ class CinemanaApi {
   }
 
   Future<List<SeasonGroup>> seasons(String id) async {
+    if (_isXtreamSeriesId(id)) {
+      return _xtreamSeasons(_stripXtreamSeriesId(id));
+    }
+
     final raw = await _get(
       CinemanaRoutes.seasons(id),
       ttl: const Duration(minutes: 12),
@@ -1204,6 +1244,14 @@ class CinemanaApi {
   }
 
   Future<List<SeasonGroup>> seasonsFor(MediaItem media, {Map<String, dynamic> detailsRaw = const {}}) async {
+    final rawSeriesId = (detailsRaw['_xtreamSeriesId'] ?? media.raw['_xtreamSeriesId'])?.toString().trim() ?? '';
+    if (rawSeriesId.isNotEmpty) {
+      return _xtreamSeasons(rawSeriesId);
+    }
+    if (_isXtreamSeriesId(media.id)) {
+      return _xtreamSeasons(_stripXtreamSeriesId(media.id));
+    }
+
     final ids = <String>{
       media.id,
       for (final key in const ['rootSeries', 'rootSeriesNb', 'seriesNb', 'parentNb', 'parentId', 'seriesID'])
@@ -1225,6 +1273,19 @@ class CinemanaApi {
   }
 
   Future<List<VideoSource>> videoSources(String id) async {
+    final xtreamEpisode = _parseXtreamEpisodeId(id);
+    if (xtreamEpisode != null) {
+      final episodeId = xtreamEpisode.$1;
+      final extension = xtreamEpisode.$2;
+      return <VideoSource>[
+        VideoSource(
+          url: _xtream.seriesEpisodeUrl(episodeId: episodeId, extension: extension),
+          quality: 'المصدر الأصلي',
+          container: extension,
+        ),
+      ];
+    }
+
     final raw = await _get(
       CinemanaRoutes.transcodes(id),
       ttl: const Duration(minutes: 10),
@@ -1244,7 +1305,35 @@ class CinemanaApi {
     return result.where((e) => seen.add(e.url)).toList();
   }
 
+  Future<List<SubtitleSource>> subtitlesFor(MediaItem media) async {
+    final rawTracks = media.raw['_xtreamSubtitles'];
+    if (rawTracks is List) {
+      final result = <SubtitleSource>[];
+      final seen = <String>{};
+      for (final row in rawTracks) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final url = (map['url'] ?? '').toString().trim();
+        if (url.isEmpty || !seen.add(url)) continue;
+        result.add(
+          SubtitleSource(
+            url: url,
+            language: (map['language'] ?? 'غير محدد').toString(),
+            label: (map['label'] ?? map['language'] ?? 'ترجمة').toString(),
+          ),
+        );
+      }
+      if (result.isNotEmpty) return result;
+    }
+    return subtitles(media.id);
+  }
+
   Future<List<SubtitleSource>> subtitles(String id) async {
+    // حلقة Xtream لا نطلب ترجمتها من Cinemana؛ إن كانت موجودة فإنها
+    // تُلتقط من get_series_info داخل subtitlesFor(MediaItem).
+    if (_parseXtreamEpisodeId(id) != null || _isXtreamSeriesId(id)) {
+      return const <SubtitleSource>[];
+    }
     final collected = <SubtitleSource>[];
 
     // المسار المخصص للترجمة هو الأسرع عندما يكون متوفراً.
@@ -1378,6 +1467,7 @@ class CinemanaApi {
   }
 
   Future<List<MediaItem>> recommendations(String id) async {
+    if (_isXtreamSeriesId(id)) return const <MediaItem>[];
     Object? lastError;
 
     for (final base in _recommendationBases) {
@@ -1517,7 +1607,294 @@ class CinemanaApi {
     return false;
   }
 
-  Future<void> clearApiCache() => _cache.clear();
+  bool _isXtreamSeriesId(String id) => id.startsWith(_xtreamSeriesPrefix);
+
+  String _stripXtreamSeriesId(String id) =>
+      _isXtreamSeriesId(id) ? id.substring(_xtreamSeriesPrefix.length) : id;
+
+  String _xtreamEpisodeId(String id, String extension) =>
+      '$_xtreamEpisodePrefix${Uri.encodeComponent(id)}|${Uri.encodeComponent(extension.isEmpty ? 'mp4' : extension)}';
+
+  (String, String)? _parseXtreamEpisodeId(String value) {
+    if (!value.startsWith(_xtreamEpisodePrefix)) return null;
+    final body = value.substring(_xtreamEpisodePrefix.length);
+    final split = body.split('|');
+    if (split.isEmpty || split.first.isEmpty) return null;
+    final id = Uri.decodeComponent(split.first);
+    final ext = split.length > 1 && split[1].isNotEmpty
+        ? Uri.decodeComponent(split[1])
+        : 'mp4';
+    return (id, ext);
+  }
+
+  String _normalizeArabicTitle(String value) => value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[أإآٱ]'), 'ا')
+      .replaceAll('ى', 'ي')
+      .replaceAll('ة', 'ه')
+      .replaceAll(RegExp(r'[ًٌٍَُِّْـ]'), '')
+      .replaceAll(RegExp(r'[^\u0600-\u06FFa-z0-9]+'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  bool _looksLikeHobAlaWaraq(String value) {
+    final q = _normalizeArabicTitle(value);
+    if (q.isEmpty) return false;
+    return q == 'حب ع ورق' ||
+        q == 'حب علي ورق' ||
+        q == 'حب على ورق' ||
+        (q.contains('حب') && q.contains('ورق'));
+  }
+
+  Future<List<Map<String, dynamic>>> _xtreamSeriesCatalog({bool refresh = false}) async {
+    final now = DateTime.now();
+    final cached = _xtreamSeriesCatalogMemory;
+    final fetchedAt = _xtreamSeriesCatalogFetchedAt;
+    if (!refresh && cached != null && fetchedAt != null && now.difference(fetchedAt) < const Duration(minutes: 20)) {
+      return cached;
+    }
+    final result = await _xtream.getSeriesCatalog();
+    _xtreamSeriesCatalogMemory = result;
+    _xtreamSeriesCatalogFetchedAt = now;
+    return result;
+  }
+
+  Future<List<MediaItem>> _searchXtreamHobAlaWaraq() async {
+    final catalog = await _xtreamSeriesCatalog();
+    final exact = <Map<String, dynamic>>[];
+    final loose = <Map<String, dynamic>>[];
+
+    for (final item in catalog) {
+      final title = (item['name'] ?? item['title'] ?? '').toString();
+      final normalized = _normalizeArabicTitle(title);
+      if (normalized == 'حب ع ورق' || normalized == 'حب علي ورق' || normalized == 'حب على ورق') {
+        exact.add(item);
+      } else if (_looksLikeHobAlaWaraq(title)) {
+        loose.add(item);
+      }
+    }
+
+    final chosen = exact.isNotEmpty ? exact : loose;
+    return chosen.map(_mediaFromXtreamSeries).where((e) => e.id.isNotEmpty).toList(growable: false);
+  }
+
+  MediaItem _mediaFromXtreamSeries(Map<String, dynamic> item) {
+    final rawId = (item['series_id'] ?? item['id'] ?? '').toString().trim();
+    final title = (item['name'] ?? item['title'] ?? 'حب ع ورق').toString().trim();
+    final cover = (item['cover'] ?? item['movie_image'] ?? '').toString().trim();
+    String backdrop = '';
+    final backdropRaw = item['backdrop_path'];
+    if (backdropRaw is List && backdropRaw.isNotEmpty) backdrop = backdropRaw.first.toString();
+    if (backdropRaw is String) backdrop = backdropRaw;
+    if (backdrop.isEmpty) backdrop = cover;
+    final year = _xtreamYear(item['releaseDate'] ?? item['release_date'] ?? item['year']);
+    final rating = double.tryParse((item['rating_5based'] ?? item['rating'] ?? '0').toString()) ?? 0;
+    final plot = (item['plot'] ?? item['description'] ?? '').toString();
+
+    return MediaItem(
+      id: '$_xtreamSeriesPrefix$rawId',
+      title: title.isEmpty ? 'حب ع ورق' : title,
+      description: plot,
+      posterUrl: cover,
+      backdropUrl: backdrop,
+      year: year,
+      rating: rating,
+      isSeries: true,
+      raw: <String, dynamic>{
+        ...item,
+        'nb': '$_xtreamSeriesPrefix$rawId',
+        'kind': '2',
+        'custom_ar_title': title,
+        'ar_content': plot,
+        'poster': cover,
+        'backdrop': backdrop,
+        'year': year,
+        'stars': rating,
+        'isSeries': true,
+        '_source': 'xtream',
+        '_xtreamSeriesId': rawId,
+      },
+    );
+  }
+
+  int _xtreamYear(dynamic raw) {
+    final value = raw?.toString() ?? '';
+    final match = RegExp(r'(19|20)\d{2}').firstMatch(value);
+    return match == null ? 0 : int.tryParse(match.group(0)!) ?? 0;
+  }
+
+  Future<Map<String, dynamic>> _xtreamSeriesInfo(String seriesId, {bool refresh = false}) async {
+    if (!refresh) {
+      final cached = _xtreamSeriesInfoMemory[seriesId];
+      if (cached != null && cached.isNotEmpty) return cached;
+    }
+    final result = await _xtream.getSeriesInfo(seriesId);
+    if (result.isNotEmpty) _xtreamSeriesInfoMemory[seriesId] = result;
+    return result;
+  }
+
+  Map<String, dynamic> _xtreamDetailsMap(String seriesId, Map<String, dynamic> raw) {
+    final infoRaw = raw['info'];
+    final info = infoRaw is Map ? Map<String, dynamic>.from(infoRaw) : <String, dynamic>{};
+    final title = (info['name'] ?? info['title'] ?? 'حب ع ورق').toString();
+    final cover = (info['cover'] ?? info['movie_image'] ?? '').toString();
+    String backdrop = '';
+    final br = info['backdrop_path'];
+    if (br is List && br.isNotEmpty) backdrop = br.first.toString();
+    if (br is String) backdrop = br;
+    if (backdrop.isEmpty) backdrop = cover;
+    final plot = (info['plot'] ?? info['description'] ?? '').toString();
+    final rating = double.tryParse((info['rating_5based'] ?? info['rating'] ?? '0').toString()) ?? 0;
+    final year = _xtreamYear(info['releaseDate'] ?? info['release_date'] ?? info['year']);
+
+    return <String, dynamic>{
+      ...info,
+      'nb': '$_xtreamSeriesPrefix$seriesId',
+      'kind': '2',
+      'custom_ar_title': title,
+      'ar_title': title,
+      'ar_content': plot,
+      'poster': cover,
+      'backdrop': backdrop,
+      'year': year,
+      'stars': rating,
+      'isSeries': true,
+      'genre': info['genre'] ?? '',
+      'trailer': info['youtube_trailer'] ?? info['trailer'] ?? '',
+      '_source': 'xtream',
+      '_xtreamSeriesId': seriesId,
+    };
+  }
+
+  List<Map<String, dynamic>> _xtreamSubtitleRows(Map<String, dynamic> episode) {
+    final result = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    void add(dynamic raw, {String fallbackLanguage = ''}) {
+      if (raw == null) return;
+      if (raw is String) {
+        final value = raw.trim();
+        if (value.isEmpty) return;
+        final lower = value.toLowerCase();
+        final looksLikeSubtitle = lower.contains('.srt') ||
+            lower.contains('.vtt') ||
+            lower.contains('.ass') ||
+            lower.contains('.ssa') ||
+            lower.startsWith('http://') ||
+            lower.startsWith('https://') ||
+            lower.startsWith('/');
+        if (!looksLikeSubtitle) return;
+        final url = _xtream.absoluteMediaUrl(value);
+        if (url.isEmpty || !seen.add(url)) return;
+        result.add(<String, dynamic>{
+          'url': url,
+          'language': fallbackLanguage.isEmpty ? 'غير محدد' : fallbackLanguage,
+          'label': fallbackLanguage.isEmpty ? 'ترجمة' : fallbackLanguage,
+        });
+        return;
+      }
+      if (raw is List) {
+        for (final item in raw) add(item, fallbackLanguage: fallbackLanguage);
+        return;
+      }
+      if (raw is Map) {
+        final map = Map<String, dynamic>.from(raw);
+        final lang = (map['language'] ?? map['lang'] ?? map['name'] ?? map['title'] ?? fallbackLanguage).toString().trim();
+        final direct = map['url'] ?? map['file'] ?? map['path'] ?? map['src'];
+        if (direct != null) add(direct, fallbackLanguage: lang);
+        for (final key in const <String>[
+          'subtitles', 'subtitle', 'subs', 'subtitle_tracks', 'subtitleTracks',
+          'external_subtitles', 'externalSubtitles', 'tracks'
+        ]) {
+          if (map.containsKey(key)) add(map[key], fallbackLanguage: lang);
+        }
+      }
+    }
+
+    for (final key in const <String>[
+      'subtitles', 'subtitle', 'subs', 'subtitle_tracks', 'subtitleTracks',
+      'external_subtitles', 'externalSubtitles', 'tracks'
+    ]) {
+      if (episode.containsKey(key)) add(episode[key]);
+    }
+    final info = episode['info'];
+    if (info is Map) add(info);
+    return result;
+  }
+
+  Future<List<SeasonGroup>> _xtreamSeasons(String seriesId) async {
+    final raw = await _xtreamSeriesInfo(seriesId);
+    final episodesRaw = raw['episodes'];
+    if (episodesRaw is! Map) return const <SeasonGroup>[];
+
+    final grouped = <int, List<Episode>>{};
+    for (final entry in episodesRaw.entries) {
+      final seasonFromKey = int.tryParse(entry.key.toString()) ?? 1;
+      final value = entry.value;
+      if (value is! List) continue;
+      for (final row in value) {
+        if (row is! Map) continue;
+        final map = Map<String, dynamic>.from(row);
+        final rawEpisodeId = (map['id'] ?? map['stream_id'] ?? '').toString().trim();
+        if (rawEpisodeId.isEmpty) continue;
+        final season = int.tryParse((map['season'] ?? seasonFromKey).toString()) ?? seasonFromKey;
+        final episodeNumber = int.tryParse((map['episode_num'] ?? map['episode'] ?? map['episode_number'] ?? '0').toString()) ?? 0;
+        final extension = (map['container_extension'] ?? 'mp4').toString().trim();
+        final infoRaw = map['info'];
+        final info = infoRaw is Map ? Map<String, dynamic>.from(infoRaw) : <String, dynamic>{};
+        final poster = (info['movie_image'] ?? info['cover_big'] ?? info['cover'] ?? '').toString();
+        final description = (info['plot'] ?? info['description'] ?? '').toString();
+        final duration = (info['duration'] ?? info['duration_secs'] ?? '').toString();
+        final rating = double.tryParse((info['rating'] ?? '0').toString()) ?? 0;
+        final title = (map['title'] ?? map['name'] ?? '').toString().trim();
+        final id = _xtreamEpisodeId(rawEpisodeId, extension);
+        final xtreamSubtitles = _xtreamSubtitleRows(map);
+
+        final episode = Episode(
+          id: id,
+          title: title.isEmpty ? 'الحلقة ${episodeNumber > 0 ? episodeNumber : grouped.length + 1}' : title,
+          seasonNumber: season <= 0 ? 1 : season,
+          episodeNumber: episodeNumber,
+          posterUrl: poster,
+          duration: duration,
+          rating: rating,
+          description: description,
+          raw: <String, dynamic>{
+            ...map,
+            'nb': id,
+            'season': season <= 0 ? 1 : season,
+            'episodeNummer': episodeNumber,
+            'episodePoster': poster,
+            'ar_content': description,
+            '_source': 'xtream',
+            '_xtreamSeriesId': seriesId,
+            '_xtreamEpisodeId': rawEpisodeId,
+            '_xtreamContainerExtension': extension,
+            '_xtreamSubtitles': xtreamSubtitles,
+          },
+        );
+        (grouped[episode.seasonNumber] ??= <Episode>[]).add(episode);
+      }
+    }
+
+    final seasons = grouped.keys.toList()..sort();
+    return seasons.map((season) {
+      final episodes = grouped[season]!
+        ..sort((a, b) {
+          final ae = a.episodeNumber <= 0 ? 1 << 30 : a.episodeNumber;
+          final be = b.episodeNumber <= 0 ? 1 << 30 : b.episodeNumber;
+          return ae.compareTo(be);
+        });
+      return SeasonGroup(season, episodes);
+    }).toList(growable: false);
+  }
+
+  Future<void> clearApiCache() async {
+    _xtreamSeriesCatalogMemory = null;
+    _xtreamSeriesCatalogFetchedAt = null;
+    _xtreamSeriesInfoMemory.clear();
+    await _cache.clear();
+  }
 
   dynamic _decodeResponse(dynamic raw) {
     if (raw is! String) return raw;

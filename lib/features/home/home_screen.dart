@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -34,11 +35,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
   final ValueNotifier<double> _brandGlassProgress = ValueNotifier<double>(0);
   final ValueNotifier<double> _brandOpacity = ValueNotifier<double>(1);
+  Timer? _sourceRefreshTimer;
 
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_handleScroll);
+    _sourceRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      if (!mounted) return;
+      ref.read(apiProvider).clearApiCache();
+      ref.invalidate(homeFeedProvider);
+      ref.invalidate(categoriesProvider);
+    });
   }
 
   void _handleScroll() {
@@ -69,12 +77,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ..dispose();
     _brandGlassProgress.dispose();
     _brandOpacity.dispose();
+    _sourceRefreshTimer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final feed = ref.watch(homeFeedProvider);
+    final settings = ref.watch(appSettingsProvider);
     final access = ref.watch(networkAccessProvider);
     final library = ref.watch(libraryProvider);
     final downloads = ref.watch(downloadProvider);
@@ -127,6 +137,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           slivers: [
             _topBarSliver(
               downloads.items.length + downloads.activeItems.length,
+              onBrandLongPress: _showSourcePicker,
+              activeSourceId: settings.activeContentSourceId,
               onContinue: () => Navigator.push(
                 context,
                 CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
@@ -139,7 +151,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             SliverFillRemaining(
               hasScrollBody: false,
               child: EmptyState(
-                title: 'تعذر تحميل مكتبة سينمانا',
+                title: 'تعذر تحميل مكتبة ${settings.activeContentSourceId == 'akwam' ? 'أكوام' : 'سينمانا'}',
                 message:
                     'تحقق من الاتصال ثم اسحب للأسفل للمحاولة مجدداً.',
                 onRetry: () => _refresh(ref),
@@ -158,6 +170,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               slivers: [
                 _topBarSliver(
                   downloads.items.length + downloads.activeItems.length,
+                  onBrandLongPress: _showSourcePicker,
+                  activeSourceId: settings.activeContentSourceId,
                   onContinue: () => Navigator.push(
                     context,
                     CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
@@ -189,6 +203,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             slivers: [
               _topBarSliver(
                 downloads.items.length + downloads.activeItems.length,
+                onBrandLongPress: _showSourcePicker,
+                activeSourceId: settings.activeContentSourceId,
                 brandGlassProgressListenable: _brandGlassProgress,
                 brandOpacityListenable: _brandOpacity,
                 onContinue: () => Navigator.push(
@@ -349,6 +365,58 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ]);
   }
 
+  Future<void> _showSourcePicker() async {
+    final settings = ref.read(appSettingsProvider);
+    final selected = await showGeneralDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'تبديل مصدر المحتوى',
+      barrierColor: Colors.black.withOpacity(.22),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, _, __) {
+        final top = MediaQuery.paddingOf(dialogContext).top + (kIsWeb ? 76.0 : 64.0);
+        return Material(
+          color: Colors.transparent,
+          child: Stack(
+            children: [
+              Positioned(
+                top: top,
+                right: kIsWeb ? 24 : 12,
+                child: _QuickSourcePicker(
+                  activeSourceId: settings.activeContentSourceId,
+                  onSelect: (id) => Navigator.of(dialogContext).pop(id),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondary, child) {
+        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            alignment: Alignment.topRight,
+            scale: Tween<double>(begin: .92, end: 1).animate(curved),
+            child: SlideTransition(
+              position: Tween<Offset>(begin: const Offset(.08, -.05), end: Offset.zero).animate(curved),
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selected == null || !mounted || selected == settings.activeContentSourceId) return;
+    await ref.read(appSettingsProvider).setActiveContentSource(selected);
+    ref.invalidate(apiProvider);
+    ref.invalidate(homeFeedProvider);
+    ref.invalidate(categoriesProvider);
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+  }
+
   void _open(BuildContext context, MediaItem item) {
     Navigator.of(context).push(
       CinematyPageRoute(builder: (_) => DetailsScreen(item: item)),
@@ -364,6 +432,8 @@ SliverAppBar _topBarSliver(
   double brandOpacity = 1,
   ValueListenable<double>? brandGlassProgressListenable,
   ValueListenable<double>? brandOpacityListenable,
+  VoidCallback? onBrandLongPress,
+  String activeSourceId = 'cinemana',
 }) =>
     SliverAppBar(
       pinned: false,
@@ -393,6 +463,8 @@ SliverAppBar _topBarSliver(
               onDownloads: onDownloads,
               brandGlassProgress: brandGlassProgress,
               brandOpacity: brandOpacity,
+              onBrandLongPress: onBrandLongPress,
+              activeSourceId: activeSourceId,
             )
           : ValueListenableBuilder<double>(
               valueListenable: brandGlassProgressListenable,
@@ -404,10 +476,202 @@ SliverAppBar _topBarSliver(
                   onDownloads: onDownloads,
                   brandGlassProgress: glass,
                   brandOpacity: opacity,
+                  onBrandLongPress: onBrandLongPress,
+                  activeSourceId: activeSourceId,
                 ),
               ),
             ),
     );
+
+
+class _QuickSourcePicker extends StatelessWidget {
+  const _QuickSourcePicker({
+    required this.activeSourceId,
+    required this.onSelect,
+  });
+
+  final String activeSourceId;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final preferredWidth = kIsWeb ? 330.0 : 312.0;
+    final width = (screenWidth - 24).clamp(260.0, preferredWidth).toDouble();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(26),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+        child: Container(
+          width: width,
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 13),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topRight,
+              end: Alignment.bottomLeft,
+              colors: [
+                const Color(0xFF241719).withOpacity(.96),
+                const Color(0xFF121011).withOpacity(.97),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: Colors.white.withOpacity(.10)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(.48),
+                blurRadius: 34,
+                offset: const Offset(0, 18),
+              ),
+            ],
+          ),
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 3, 8, 10),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: AppColors.redBright.withOpacity(.14),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.swap_horiz_rounded, size: 17, color: AppColors.redBright),
+                      ),
+                      const SizedBox(width: 9),
+                      const Expanded(
+                        child: Text(
+                          'تبديل المصدر',
+                          style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      Text(
+                        'اضغط للاختيار',
+                        style: TextStyle(color: Colors.white.withOpacity(.38), fontSize: 10.5),
+                      ),
+                    ],
+                  ),
+                ),
+                _QuickSourceOption(
+                  id: 'cinemana',
+                  title: 'سينماتي',
+                  subtitle: 'المصدر الرئيسي • سينمانا',
+                  asset: 'assets/branding/logo.webp',
+                  selected: activeSourceId == 'cinemana',
+                  onTap: onSelect,
+                ),
+                const SizedBox(height: 8),
+                _QuickSourceOption(
+                  id: 'akwam',
+                  title: 'أكوام',
+                  subtitle: 'أفلام ومسلسلات أكوام',
+                  asset: 'assets/branding/akwam_logo.webp',
+                  selected: activeSourceId == 'akwam',
+                  onTap: onSelect,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickSourceOption extends StatelessWidget {
+  const _QuickSourceOption({
+    required this.id,
+    required this.title,
+    required this.subtitle,
+    required this.asset,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String id;
+  final String title;
+  final String subtitle;
+  final String asset;
+  final bool selected;
+  final ValueChanged<String> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? AppColors.redBright.withOpacity(.12) : Colors.white.withOpacity(.035),
+      borderRadius: BorderRadius.circular(19),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => onTap(id),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(19),
+            border: Border.all(
+              color: selected ? AppColors.redBright.withOpacity(.48) : Colors.white.withOpacity(.055),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(.32),
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Colors.white.withOpacity(.08)),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.asset(asset, fit: BoxFit.cover, filterQuality: FilterQuality.medium),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Colors.white.withOpacity(.43), fontSize: 11.5),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: selected ? AppColors.redBright : Colors.white.withOpacity(.06),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: selected ? AppColors.redBright : Colors.white.withOpacity(.08)),
+                ),
+                child: Icon(
+                  selected ? Icons.check_rounded : Icons.chevron_left_rounded,
+                  size: 16,
+                  color: selected ? Colors.white : Colors.white54,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _UnavailableHome extends StatelessWidget {
   const _UnavailableHome({

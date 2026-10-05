@@ -6,12 +6,16 @@ import 'data/models/category.dart';
 import 'data/models/media_item.dart';
 import 'data/models/network_access_state.dart';
 import 'data/services/cinemana_api.dart';
+import 'data/services/source_aware_api.dart';
 import 'data/stores/download_store.dart';
 import 'data/stores/app_settings_store.dart';
 import 'data/stores/library_store.dart';
 import 'data/stores/subtitle_settings_store.dart';
 
-final apiProvider = Provider<CinemanaApi>((ref) => CinemanaApi());
+final apiProvider = Provider<CinemanaApi>((ref) {
+  final settings = ref.watch(appSettingsProvider);
+  return SourceAwareApi(source: settings.activeContentSource);
+});
 
 final imdbRatingProvider = FutureProvider.family<double, String>((ref, id) async {
   final cleanId = id.trim();

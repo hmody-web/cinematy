@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
 
 class BrandLogo extends StatelessWidget {
-  const BrandLogo({super.key, this.size = 42, this.showName = true});
+  const BrandLogo({
+    super.key,
+    this.size = 42,
+    this.showName = true,
+    this.logoBadge,
+  });
 
   final double size;
   final bool showName;
+  final Widget? logoBadge;
 
   @override
   Widget build(BuildContext context) {
-    final logo = ClipRRect(
+    final logoImage = ClipRRect(
       borderRadius: BorderRadius.circular(size * .28),
       child: Image.asset(
         'assets/branding/logo.webp',
@@ -17,6 +23,24 @@ class BrandLogo extends StatelessWidget {
         fit: BoxFit.cover,
       ),
     );
+
+    final logo = logoBadge == null
+        ? logoImage
+        : SizedBox(
+            width: size,
+            height: size,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(child: logoImage),
+                Positioned(
+                  left: -size * .10,
+                  bottom: -size * .10,
+                  child: logoBadge!,
+                ),
+              ],
+            ),
+          );
 
     if (!showName) return logo;
 

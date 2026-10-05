@@ -5,13 +5,21 @@ import '../core/network/image_cache.dart';
 import '../core/theme/app_theme.dart';
 import 'shimmer.dart';
 
+String _stableImageCacheKey(String url) {
+  final uri = Uri.tryParse(url.trim());
+  if (uri == null || !uri.hasAuthority) return url.trim();
+  // Akwam/CDN mirrors may append changing query parameters to the same poster.
+  // Cache the actual image path as one object so returning to a screen is instant.
+  return uri.replace(query: '', fragment: '').toString();
+}
+
 class CinematyNetworkImage extends StatelessWidget {
   const CinematyNetworkImage({
     super.key,
     required this.url,
     this.fit = BoxFit.cover,
     this.borderRadius = BorderRadius.zero,
-    this.memCacheWidth = 900,
+    this.memCacheWidth = 480,
   });
 
   final String url;
@@ -27,12 +35,16 @@ class CinematyNetworkImage extends StatelessWidget {
           ? const _Placeholder()
           : CachedNetworkImage(
               imageUrl: url,
+              cacheKey: _stableImageCacheKey(url),
               cacheManager: CinematyImageCacheManager.instance,
               fit: fit,
+              useOldImageOnUrlChange: true,
               // لا نؤخر ظهور الصورة بأنيميشن fade بعد اكتمال التنزيل.
               fadeInDuration: Duration.zero,
               fadeOutDuration: Duration.zero,
               memCacheWidth: memCacheWidth,
+              maxWidthDiskCache: 1200,
+              maxHeightDiskCache: 1800,
               placeholder: (_, __) => const _Placeholder(loading: true),
               errorWidget: (_, __, ___) => const _Placeholder(),
             ),

@@ -151,10 +151,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   List<SeasonGroup> _seasons = const <SeasonGroup>[];
   bool _episodesLoading = false;
+  bool _episodeHandoff = false;
   Episode? _nextEpisode;
   bool _nextEpisodeVisible = false;
   double _nextEpisodeProgress = 0;
   bool _nextEpisodeDismissed = false;
+
+  bool get _isXtreamPlayback =>
+      widget.media.raw['_source']?.toString() == 'xtream' ||
+      widget.media.id.startsWith('xtream_episode|') ||
+      (_currentMediaUrl?.contains('/series/') ?? false);
 
   bool get _inWatchParty =>
       widget.watchPartySessionId?.trim().isNotEmpty == true;
@@ -193,7 +199,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _watchPartyService = WatchPartyService.instance;
     _player = Player(
       configuration: const PlayerConfiguration(
-        bufferSize: 64 * 1024 * 1024,
+        bufferSize: 128 * 1024 * 1024,
       ),
     );
     _controller = VideoController(
@@ -1064,13 +1070,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         _subtitles = _localSubtitleSources(downloaded);
         if (_subtitles.isEmpty) {
           try {
-            _subtitles = await _api.subtitles(widget.media.id);
+            _subtitles = await _api.subtitlesFor(widget.media);
           } catch (_) {}
         }
       } else {
         final values = await Future.wait<dynamic>([
           _api.videoSources(widget.media.id),
-          _api.subtitles(widget.media.id).catchError(
+          _api.subtitlesFor(widget.media).catchError(
                 (_) => <SubtitleSource>[],
               ),
         ]);
@@ -1394,6 +1400,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   Future<void> _startPreviewWarmup() async {
+    // Xtream series are single-origin progressive streams. Generating preview
+    // thumbnails in a second hidden player competes with the main playback
+    // connection and can cause short periodic stalls, so keep previews on-demand.
+    if (_isXtreamPlayback) return;
     if (_previewWarmupRunning || _duration.inSeconds <= 0) return;
     final url = _currentMediaUrl;
     if (url == null || url.isEmpty) return;
@@ -2255,6 +2265,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
     if (!mounted) return;
     final downloaded = ref.read(downloadProvider).itemFor(episode.id);
+    // Keep immersive fullscreen active while replacing one episode with another.
+    // Otherwise dispose() of the old player restores edge-to-edge after the new
+    // player already entered immersive mode, causing the notification/status bar
+    // to flash or remain visible.
+    _episodeHandoff = true;
+    await SystemChrome.setPreferredOrientations(
+      const [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight],
+    );
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(
       CinematyPageRoute(
         builder: (_) => PlayerScreen(
@@ -2272,6 +2292,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         .trim();
     final fallbackSeriesTitle = widget.media.title.split('•').first.trim();
     final title = seriesTitle.isNotEmpty ? seriesTitle : fallbackSeriesTitle;
+    final rawRootId = (widget.media.raw['_seriesId'] ??
+            widget.media.raw['rootSeries'] ??
+            widget.media.raw['rootSeriesNb'] ??
+            '')
+        .toString()
+        .trim();
+    final rootId = rawRootId.isNotEmpty ? rawRootId : widget.media.id;
+    final seriesPoster = (widget.media.raw['_seriesPoster'] ?? '')
+        .toString()
+        .trim();
+    final seriesBackdrop = (widget.media.raw['_seriesBackdrop'] ?? '')
+        .toString()
+        .trim();
     return MediaItem(
       id: episode.id,
       title: '$title • ${episode.title}',
@@ -2286,7 +2319,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       raw: {
         ...widget.media.raw,
         ...episode.raw,
+        'rootSeries': rootId,
+        'rootSeriesNb': rootId,
+        '_seriesId': rootId,
         '_seriesTitle': title,
+        '_seriesDescription': widget.media.raw['_seriesDescription'] ?? widget.media.description,
+        '_seriesPoster': seriesPoster.isNotEmpty ? seriesPoster : widget.media.posterUrl,
+        '_seriesBackdrop': seriesBackdrop.isNotEmpty ? seriesBackdrop : widget.media.backdropUrl,
+        '_seriesYear': widget.media.raw['_seriesYear'] ?? widget.media.year,
+        '_seriesRating': widget.media.raw['_seriesRating'] ?? widget.media.rating,
       },
     );
   }
@@ -2362,8 +2403,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _previewPlayer?.dispose();
     _previewWarmupPlayer?.dispose();
     _player.dispose();
-    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    if (!_episodeHandoff) {
+      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
     super.dispose();
   }
 
@@ -3912,6 +3955,17 @@ class _EpisodesSheetState extends State<_EpisodesSheet> {
 
     if (_seasonIndex >= widget.seasons.length) _seasonIndex = 0;
     final current = widget.seasons[_seasonIndex];
+    final currentIndex = current.episodes.indexWhere(
+      (episode) => episode.id == widget.currentMedia.id ||
+          (episode.seasonNumber == widget.currentMedia.season &&
+              episode.episodeNumber == widget.currentMedia.episode),
+    );
+    final displayedEpisodes = currentIndex > 0
+        ? <Episode>[
+            ...current.episodes.sublist(currentIndex),
+            ...current.episodes.sublist(0, currentIndex),
+          ]
+        : current.episodes;
 
     return SafeArea(
       child: Container(
@@ -3974,10 +4028,10 @@ class _EpisodesSheetState extends State<_EpisodesSheet> {
             Expanded(
               child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                itemCount: current.episodes.length,
+                itemCount: displayedEpisodes.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (_, i) {
-                  final episode = current.episodes[i];
+                  final episode = displayedEpisodes[i];
                   final isCurrent = episode.id == widget.currentMedia.id ||
                       (episode.seasonNumber == widget.currentMedia.season &&
                           episode.episodeNumber == widget.currentMedia.episode);
@@ -4004,7 +4058,11 @@ class _EpisodesSheetState extends State<_EpisodesSheet> {
                             child: AspectRatio(
                               aspectRatio: 16 / 9,
                               child: CinematyNetworkImage(
-                                url: episode.posterUrl,
+                                url: episode.posterUrl.isNotEmpty
+                                    ? episode.posterUrl
+                                    : widget.currentMedia.backdropUrl.isNotEmpty
+                                        ? widget.currentMedia.backdropUrl
+                                        : widget.currentMedia.posterUrl,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                             ),

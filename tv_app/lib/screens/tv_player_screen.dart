@@ -89,7 +89,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
 
     _player = Player(
       configuration: const PlayerConfiguration(
-        bufferSize: 64 * 1024 * 1024,
+        bufferSize: 128 * 1024 * 1024,
       ),
     );
     _videoController = VideoController(
@@ -210,7 +210,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
       } else {
         final values = await Future.wait<dynamic>([
           tvApi.videoSources(media.id),
-          tvApi.subtitles(media.id).catchError(
+          tvApi.subtitlesFor(media).catchError(
             (_) => <SubtitleSource>[],
           ),
         ]);

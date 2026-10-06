@@ -141,6 +141,44 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
       ? 'متابعة • الموسم $_resumeSeason • الحلقة $_resumeEpisode'
       : 'مشاهدة';
 
+  MediaItem _displayMedia(ContentDetails? details) {
+    final fetched = details?.media.id.isNotEmpty == true ? details!.media : _entryItem;
+    final sourceId = (_entryItem.raw['_source'] ?? fetched.raw['_source'] ?? '').toString().trim();
+    if (sourceId != 'akwam') return fetched;
+
+    // Akwam may expose a wide og:image/detail artwork which is not the poster
+    // shown on the listing card. Keep the exact listing artwork when opening
+    // details so the cover never changes to an unrelated image.
+    final poster = _entryItem.posterUrl.isNotEmpty ? _entryItem.posterUrl : fetched.posterUrl;
+    final backdrop = _entryItem.backdropUrl.isNotEmpty
+        ? _entryItem.backdropUrl
+        : poster.isNotEmpty
+            ? poster
+            : fetched.backdropUrl;
+    final raw = <String, dynamic>{
+      ...fetched.raw,
+      ..._entryItem.raw,
+      '_source': 'akwam',
+      '_sourceUrl': _sourceUrlOf(_entryItem),
+      '_seriesPoster': poster,
+      '_seriesBackdrop': backdrop,
+    };
+    return MediaItem(
+      id: fetched.id.isNotEmpty ? fetched.id : _entryItem.id,
+      title: fetched.title.isNotEmpty ? fetched.title : _entryItem.title,
+      description: fetched.description.isNotEmpty ? fetched.description : _entryItem.description,
+      posterUrl: poster,
+      backdropUrl: backdrop,
+      year: fetched.year != 0 ? fetched.year : _entryItem.year,
+      rating: fetched.rating != 0 ? fetched.rating : _entryItem.rating,
+      views: fetched.views != 0 ? fetched.views : _entryItem.views,
+      isSeries: fetched.isSeries || _entryItem.isSeries,
+      season: fetched.season,
+      episode: fetched.episode,
+      raw: raw,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final library = ref.watch(libraryProvider);
@@ -152,7 +190,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
         future: _details,
         builder: (context, snapshot) {
           final details = snapshot.data;
-          final media = details?.media.id.isNotEmpty == true ? details!.media : _entryItem;
+          final media = _displayMedia(details);
           final watchLater = library.isWatchLater(media.id);
           final favorite = library.isFavorite(media.id);
           final downloaded = downloads.isDownloaded(media.id);
@@ -1289,6 +1327,7 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
 
   int _selected = 0;
   bool _didApplyInitial = false;
+  bool _didScrollToInitialEpisode = false;
   int _visibleEpisodeCount = _episodeBatchSize;
   int? _visibleSeasonNumber;
   int _totalEpisodeCount = 0;
@@ -1306,6 +1345,7 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
     if (oldWidget.initialSeason != widget.initialSeason ||
         oldWidget.initialEpisode != widget.initialEpisode) {
       _didApplyInitial = false;
+      _didScrollToInitialEpisode = false;
       _visibleEpisodeCount = _episodeBatchSize;
       _visibleSeasonNumber = null;
     }
@@ -1367,16 +1407,29 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
           _visibleSeasonNumber = current.number;
           _visibleEpisodeCount = _episodeBatchSize;
         }
-        var orderedEpisodes = current.episodes;
+        final orderedEpisodes = current.episodes;
+        var resumeIndex = -1;
         if (widget.initialSeason == current.number && widget.initialEpisode != null) {
-          final resumeIndex = current.episodes.indexWhere(
+          resumeIndex = current.episodes.indexWhere(
             (episode) => episode.episodeNumber == widget.initialEpisode,
           );
-          if (resumeIndex > 0) {
-            orderedEpisodes = <Episode>[
-              ...current.episodes.sublist(resumeIndex),
-              ...current.episodes.sublist(0, resumeIndex),
-            ];
+          if (resumeIndex >= 0) {
+            _visibleEpisodeCount = (_visibleEpisodeCount < resumeIndex + _episodeBatchSize
+                    ? resumeIndex + _episodeBatchSize
+                    : _visibleEpisodeCount)
+                .clamp(0, orderedEpisodes.length)
+                .toInt();
+            if (!_didScrollToInitialEpisode) {
+              _didScrollToInitialEpisode = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!_episodeController.hasClients) return;
+                const cardExtent = 386.0; // 370 card + 16 spacing
+                final target = (resumeIndex * cardExtent)
+                    .clamp(0.0, _episodeController.position.maxScrollExtent)
+                    .toDouble();
+                _episodeController.jumpTo(target);
+              });
+            }
           }
         }
         _totalEpisodeCount = orderedEpisodes.length;
@@ -1425,6 +1478,8 @@ class _TvSeasonsPanelState extends ConsumerState<_TvSeasonsPanel> {
                     downloaded: downloads.isDownloaded(ep.id),
                     downloading: downloads.isDownloading(ep.id),
                     progress: downloads.progressOf(ep.id),
+                    current: widget.initialSeason == current.number &&
+                        widget.initialEpisode == ep.episodeNumber,
                     onPlay: () => widget.onPlay(ep),
                     onWatchParty: () => widget.onWatchPartyEpisode(ep),
                     onDownload: () => widget.onDownloadEpisode(ep),
@@ -1447,6 +1502,7 @@ class _TvEpisodeCard extends StatefulWidget {
     required this.downloaded,
     required this.downloading,
     required this.progress,
+    required this.current,
     required this.onPlay,
     required this.onWatchParty,
     required this.onDownload,
@@ -1456,6 +1512,7 @@ class _TvEpisodeCard extends StatefulWidget {
   final String fallbackImage;
   final bool downloaded, downloading;
   final double progress;
+  final bool current;
   final VoidCallback onPlay, onWatchParty, onDownload;
   final bool autofocus;
 
@@ -1483,7 +1540,12 @@ class _TvEpisodeCardState extends State<_TvEpisodeCard> {
             decoration: BoxDecoration(
               color: const Color(0xFF111111),
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: _focused ? Colors.white : Colors.white10, width: _focused ? 2.4 : 1),
+              border: Border.all(
+                color: widget.current
+                    ? AppColors.redBright.withOpacity(.65)
+                    : (_focused ? Colors.white : Colors.white10),
+                width: _focused || widget.current ? 2.2 : 1,
+              ),
               boxShadow: _focused ? [BoxShadow(color: AppColors.redBright.withOpacity(.28), blurRadius: 24)] : null,
             ),
             child: Column(
@@ -1512,7 +1574,13 @@ class _TvEpisodeCardState extends State<_TvEpisodeCard> {
                       Positioned(
                         right: 12,
                         bottom: 10,
-                        child: Text('الحلقة ${widget.episode.episodeNumber}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                        child: Text(
+                          'الحلقة ${widget.episode.episodeNumber}',
+                          style: TextStyle(
+                            color: widget.current ? AppColors.redBright : Colors.white,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -1923,6 +1991,8 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
   int? _visibleSeasonNumber;
   int _totalEpisodeCount = 0;
   final GlobalKey _loadMoreKey = GlobalKey();
+  final GlobalKey _currentEpisodeKey = GlobalKey();
+  bool _didScrollToInitialEpisode = false;
 
   @override
   void initState() {
@@ -1940,6 +2010,7 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
     if (oldWidget.initialSeason != widget.initialSeason ||
         oldWidget.initialEpisode != widget.initialEpisode) {
       _didApplyInitial = false;
+      _didScrollToInitialEpisode = false;
       _visibleEpisodeCount = _episodeBatchSize;
       _visibleSeasonNumber = null;
     }
@@ -2018,21 +2089,36 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
         if (_visibleSeasonNumber != current.number) {
           _resetVisibleEpisodes(current.number);
         }
-        var orderedEpisodes = current.episodes;
+        final orderedEpisodes = current.episodes;
+        var resumeIndex = -1;
         if (widget.initialSeason == current.number && widget.initialEpisode != null) {
-          final resumeIndex = current.episodes.indexWhere(
+          resumeIndex = current.episodes.indexWhere(
             (episode) => episode.episodeNumber == widget.initialEpisode,
           );
-          if (resumeIndex > 0) {
-            orderedEpisodes = <Episode>[
-              ...current.episodes.sublist(resumeIndex),
-              ...current.episodes.sublist(0, resumeIndex),
-            ];
+          if (resumeIndex >= 0) {
+            _visibleEpisodeCount = (_visibleEpisodeCount < resumeIndex + _episodeBatchSize
+                    ? resumeIndex + _episodeBatchSize
+                    : _visibleEpisodeCount)
+                .clamp(0, orderedEpisodes.length)
+                .toInt();
           }
         }
         _totalEpisodeCount = orderedEpisodes.length;
         final visibleEpisodes = orderedEpisodes.take(_visibleEpisodeCount).toList(growable: false);
         final hasMoreEpisodes = visibleEpisodes.length < orderedEpisodes.length;
+        if (resumeIndex >= 0 && !_didScrollToInitialEpisode) {
+          _didScrollToInitialEpisode = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final context = _currentEpisodeKey.currentContext;
+            if (context == null) return;
+            Scrollable.ensureVisible(
+              context,
+              alignment: .06,
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOutCubic,
+            );
+          });
+        }
 
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SizedBox(
@@ -2066,7 +2152,10 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
             final downloaded = downloads.isDownloaded(episode.id);
             final downloading = downloads.isDownloading(episode.id);
             final progress = downloads.progressOf(episode.id);
+            final isCurrent = widget.initialSeason == current.number &&
+                widget.initialEpisode == episode.episodeNumber;
             return InkWell(
+              key: isCurrent ? _currentEpisodeKey : null,
               autofocus: false,
               onTap: () => widget.onPlay(episode),
               child: Padding(
@@ -2087,7 +2176,15 @@ class _SeasonsViewState extends ConsumerState<_SeasonsView> {
                             height: 31,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(color: Colors.black.withOpacity(.70), shape: BoxShape.circle, border: Border.all(color: Colors.white24)),
-                            child: Text('${episode.episodeNumber}', textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
+                            child: Text(
+                              '${episode.episodeNumber}',
+                              textDirection: TextDirection.ltr,
+                              style: TextStyle(
+                                color: isCurrent ? AppColors.redBright : Colors.white,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 12,
+                              ),
+                            ),
                           ),
                         ),
                       ]),

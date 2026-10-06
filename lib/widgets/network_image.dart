@@ -13,7 +13,7 @@ String _stableImageCacheKey(String url) {
   return uri.replace(query: '', fragment: '').toString();
 }
 
-class CinematyNetworkImage extends StatelessWidget {
+class CinematyNetworkImage extends StatefulWidget {
   const CinematyNetworkImage({
     super.key,
     required this.url,
@@ -28,23 +28,39 @@ class CinematyNetworkImage extends StatelessWidget {
   final int memCacheWidth;
 
   @override
+  State<CinematyNetworkImage> createState() => _CinematyNetworkImageState();
+}
+
+class _CinematyNetworkImageState extends State<CinematyNetworkImage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
+    super.build(context);
     return ClipRRect(
-      borderRadius: borderRadius,
-      child: url.isEmpty
+      borderRadius: widget.borderRadius,
+      child: widget.url.isEmpty
           ? const _Placeholder()
           : CachedNetworkImage(
-              imageUrl: url,
-              cacheKey: _stableImageCacheKey(url),
+              imageUrl: widget.url,
+              cacheKey: _stableImageCacheKey(widget.url),
               cacheManager: CinematyImageCacheManager.instance,
-              fit: fit,
+              fit: widget.fit,
               useOldImageOnUrlChange: true,
               // لا نؤخر ظهور الصورة بأنيميشن fade بعد اكتمال التنزيل.
               fadeInDuration: Duration.zero,
               fadeOutDuration: Duration.zero,
-              memCacheWidth: memCacheWidth,
+              memCacheWidth: widget.memCacheWidth,
               maxWidthDiskCache: 1200,
               maxHeightDiskCache: 1800,
+              imageBuilder: (_, provider) => Image(
+                image: provider,
+                fit: widget.fit,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.low,
+              ),
               placeholder: (_, __) => const _Placeholder(loading: true),
               errorWidget: (_, __, ___) => const _Placeholder(),
             ),

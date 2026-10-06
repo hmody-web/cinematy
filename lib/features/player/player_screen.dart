@@ -213,14 +213,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     _positionSub = _player.stream.position.listen((value) {
       if (!mounted || _scrubbing || _switchingSource || _initializingPlayback) return;
+
+      // Some streams briefly report 0 during buffering/reconnect. Never let that
+      // transient value overwrite the last trusted position shown/saved by the
+      // app. Explicit user seeks still update _position before the stream event.
+      final currentMs = _position.inMilliseconds;
+      final incomingMs = value.inMilliseconds;
+      final suspiciousReset = currentMs >= 5000 && incomingMs <= 1200;
+      if (suspiciousReset) {
+        unawaited(_persistProgress());
+        return;
+      }
+
       setState(() => _position = value);
       _handleNearEnd(value);
-      if (!_initializingPlayback &&
-          !_switchingSource &&
-          _duration.inMilliseconds > 0 &&
-          value.inMilliseconds >= (_duration.inMilliseconds * .985)) {
-        _libraryStore.clearProgress(widget.media.id);
-      }
     });
 
     _durationSub = _player.stream.duration.listen((value) {
@@ -232,14 +238,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     });
 
     _bufferingSub = _player.stream.buffering.listen((value) {
+      if (value) unawaited(_persistProgress());
       if (mounted) setState(() => _buffering = value);
       if (_inWatchParty) {
         unawaited(_handleLocalPartyBuffering(value));
       }
     });
 
+    // Keep the resume point very fresh so a network stall, process pause or
+    // abrupt close loses at most a couple of seconds.
     _progressTimer = Timer.periodic(
-      const Duration(seconds: 8),
+      const Duration(seconds: 2),
       (_) => _persistProgress(),
     );
 
@@ -1027,6 +1036,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   Future<void> _exitPlayer() async {
+    await _persistProgress();
     await _preparePartyExit();
     if (mounted) Navigator.pop(context);
   }
@@ -1044,9 +1054,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         _position = Duration.zero;
       } else {
         final progress = _libraryStore.watchProgress(widget.media.id);
-        if (progress != null &&
-            progress.positionMs >= 5000 &&
-            progress.ratio < .97) {
+        if (progress != null && progress.positionMs >= 5000) {
           _startupResumeTarget = Duration(milliseconds: progress.positionMs);
           _position = _startupResumeTarget!;
           if (progress.durationMs > 0) {
@@ -1842,11 +1850,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   Future<void> _persistProgress() async {
     if (_initializingPlayback || _switchingSource) return;
     if (_duration.inMilliseconds <= 0 || _position.inMilliseconds <= 0) return;
-    if (_position.inMilliseconds >= (_duration.inMilliseconds * .97)) {
-      await _libraryStore.clearProgress(widget.media.id);
-    } else {
-      await _libraryStore.saveProgress(widget.media, _position, _duration);
-    }
+    // Never erase the last position just because playback reached the end.
+    // Re-opening the same movie/episode must still restore the last watched
+    // second instead of silently starting from zero.
+    await _libraryStore.saveProgress(widget.media, _position, _duration);
   }
 
   void _toggleControls() {
@@ -1919,8 +1926,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       }
     } else {
       if (shouldPlay) {
-        await _player.play();
+        final trusted = _position;
+        if (trusted.inMilliseconds >= 5000) {
+          // Always anchor play/resume to our last trusted position. Some HLS
+          // streams reset to zero exactly when play() is called after a stall
+          // or end-of-buffer state, even though state.position looked correct
+          // one line earlier.
+          await _stabilizePlaybackPosition(trusted, shouldPlay: true);
+        } else {
+          await _player.play();
+        }
       } else {
+        await _persistProgress();
         await _player.pause();
       }
     }
@@ -1964,6 +1981,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final targetDuration = Duration(milliseconds: target);
     await _player.seek(targetDuration);
     if (mounted) setState(() => _position = targetDuration);
+    unawaited(_persistProgress());
     if (feedbackAlignment != null) {
       _showSeekFeedback(
         seconds > 0 ? '+${seconds.abs()} ثانية' : '-${seconds.abs()} ثانية',
@@ -2168,6 +2186,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     // كان يجعل أول Thumbnail بعد كل فترة انتظار بطيئاً جداً.
     unawaited(_startPreviewWarmup());
     _handleNearEnd(target);
+    unawaited(_persistProgress());
     _scheduleHide();
   }
 
@@ -2240,6 +2259,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   Future<void> _goToEpisode(Episode episode) async {
+    if (!mounted) return;
+    await _persistProgress();
     if (!mounted) return;
     if (_inWatchParty && !_partyCanChangeEpisode()) {
       _partyPermissionDenied('تغيير الحلقة');
@@ -2395,7 +2416,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         _watchPartySession != null) {
       unawaited(_watchPartyService.endSession(_watchPartySession!));
     }
-    _persistProgress();
+    unawaited(_persistProgress());
     _previewWarmupStopRequested = true;
     _previewWarmupGeneration++;
     _previewController = null;
@@ -2569,9 +2590,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               _TinyPlayerAction(
                 icon: Icons.arrow_forward_ios_rounded,
                 tooltip: 'رجوع',
-                onTap: _inWatchParty
-                    ? () => unawaited(_exitPlayer())
-                    : () => Navigator.pop(context),
+                onTap: () => unawaited(_exitPlayer()),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -3904,6 +3923,9 @@ class _EpisodesSheet extends StatefulWidget {
 
 class _EpisodesSheetState extends State<_EpisodesSheet> {
   late int _seasonIndex;
+  late final ScrollController _episodeController;
+  bool _didScrollToCurrent = false;
+  static const double _episodeExtent = 74.5;
 
   @override
   void initState() {
@@ -3913,6 +3935,25 @@ class _EpisodesSheetState extends State<_EpisodesSheet> {
         ? -1
         : widget.seasons.indexWhere((s) => s.number == currentSeason);
     _seasonIndex = found >= 0 ? found : 0;
+    _episodeController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _episodeController.dispose();
+    super.dispose();
+  }
+
+  void _scrollCurrentIntoView(int currentIndex) {
+    if (currentIndex < 0 || _didScrollToCurrent) return;
+    _didScrollToCurrent = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_episodeController.hasClients) return;
+      final target = (currentIndex * _episodeExtent)
+          .clamp(0.0, _episodeController.position.maxScrollExtent)
+          .toDouble();
+      _episodeController.jumpTo(target);
+    });
   }
 
   @override
@@ -3960,12 +4001,8 @@ class _EpisodesSheetState extends State<_EpisodesSheet> {
           (episode.seasonNumber == widget.currentMedia.season &&
               episode.episodeNumber == widget.currentMedia.episode),
     );
-    final displayedEpisodes = currentIndex > 0
-        ? <Episode>[
-            ...current.episodes.sublist(currentIndex),
-            ...current.episodes.sublist(0, currentIndex),
-          ]
-        : current.episodes;
+    final displayedEpisodes = current.episodes;
+    _scrollCurrentIntoView(currentIndex);
 
     return SafeArea(
       child: Container(
@@ -4020,16 +4057,21 @@ class _EpisodesSheetState extends State<_EpisodesSheet> {
                 itemBuilder: (_, i) => ChoiceChip(
                   selected: i == _seasonIndex,
                   label: Text('الموسم ${widget.seasons[i].number}'),
-                  onSelected: (_) => setState(() => _seasonIndex = i),
+                  onSelected: (_) => setState(() {
+                    _seasonIndex = i;
+                    _didScrollToCurrent = false;
+                    if (_episodeController.hasClients) _episodeController.jumpTo(0);
+                  }),
                 ),
               ),
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: ListView.separated(
+              child: ListView.builder(
+                controller: _episodeController,
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                itemExtent: _episodeExtent,
                 itemCount: displayedEpisodes.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (_, i) {
                   final episode = displayedEpisodes[i];
                   final isCurrent = episode.id == widget.currentMedia.id ||
@@ -4079,7 +4121,8 @@ class _EpisodesSheetState extends State<_EpisodesSheet> {
                             child: Text(
                               '${episode.episodeNumber}',
                               textDirection: TextDirection.ltr,
-                              style: const TextStyle(
+                              style: TextStyle(
+                                color: isCurrent ? AppColors.redBright : Colors.white,
                                 fontWeight: FontWeight.w900,
                                 fontSize: 11,
                               ),

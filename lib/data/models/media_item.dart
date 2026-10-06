@@ -57,9 +57,7 @@ class MediaItem {
 
     return MediaItem(
       id: id,
-      title: JsonUtils.string(json, [
-        'custom_ar_title', 'ar_title', 'lang_ar_title', 'arTitle', 'display_name', 'title', 'en_title', 'enTitle',
-      ], fallback: 'بدون عنوان'),
+      title: _mediaTitle(json),
       description: JsonUtils.string(json, ['ar_content', 'arContent', 'description', 'plot', 'overview', 'en_content', 'enContent']),
       posterUrl: normalizeMediaUrl(poster),
       backdropUrl: normalizeMediaUrl(backdrop),
@@ -141,9 +139,9 @@ class MediaItem {
     );
   }
 
-  MediaItem copyWith({String? backdropUrl, double? rating}) => MediaItem(
+  MediaItem copyWith({String? title, String? backdropUrl, double? rating}) => MediaItem(
     id: id,
-    title: title,
+    title: title ?? this.title,
     description: description,
     posterUrl: posterUrl,
     backdropUrl: backdropUrl ?? this.backdropUrl,
@@ -155,6 +153,38 @@ class MediaItem {
     episode: episode,
     raw: raw,
   );
+}
+
+
+String _mediaTitle(Map<String, dynamic> json) {
+  // `lang_ar_title` is not always the video's title in Cinemana. In some
+  // home/videoGroups payloads it contains the language/group/section label
+  // (for example "4K" or a curated row title). Always prefer fields that
+  // belong to the media object itself, and use lang_ar_title only as a final
+  // compatibility fallback.
+  final title = JsonUtils.string(json, const [
+    'custom_ar_title',
+    'ar_title',
+    'arTitle',
+    'videoTitle',
+    'video_title',
+    'videoArTitle',
+    'video_ar_title',
+    'movieTitle',
+    'movie_title',
+    'seriesTitle',
+    'series_title',
+    'display_name',
+    'displayName',
+    'name',
+    'title',
+    'en_title',
+    'enTitle',
+    'videoEnTitle',
+    'lang_en_title',
+    'lang_ar_title',
+  ]).trim();
+  return title.isEmpty ? 'بدون عنوان' : title;
 }
 
 String normalizeMediaUrl(String value) {

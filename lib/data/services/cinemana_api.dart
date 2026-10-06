@@ -39,6 +39,7 @@ class CinemanaApi {
   // langNb المرتبط بكل Category كما يعيده تطبيق Cinemana داخل langArray.
   // هذا الحقل مهم جداً لطلب /video/V/2 ولا يجوز إسقاطه.
   final Map<String, String> _categoryLanguageIds = <String, String>{};
+  final Map<String, String> _homeCardTitleCache = <String, String>{};
 
   // نفس Xtream المستخدم في قسم التلفاز. لا توجد بيانات حساب مكررة هنا.
   final XtreamTvService _xtream = XtreamTvService();
@@ -232,11 +233,19 @@ class CinemanaApi {
         map,
         candidateKeys: const ['content', 'videos', 'items', 'videoList'],
       );
-      final media = nested
-          .whereType<Map>()
-          .map((e) => MediaItem.fromJson(Map<String, dynamic>.from(e)))
-          .where((e) => e.id.isNotEmpty)
-          .toList();
+      final sectionTitle = JsonUtils.string(
+        map,
+        ['lang_ar_title', 'ar_title', 'title', 'name'],
+        fallback: 'مختارات',
+      );
+      final media = await Future.wait(
+        nested.whereType<Map>().map((e) async {
+          final rawItem = Map<String, dynamic>.from(e);
+          final item = MediaItem.fromJson(rawItem);
+          return _repairHomeCardTitleFromDetails(item, rawItem, sectionTitle);
+        }),
+      );
+      media.removeWhere((e) => e.id.isEmpty);
       if (media.isEmpty) continue;
 
       sections.add(
@@ -246,11 +255,7 @@ class CinemanaApi {
             ['id', 'groupID', 'groupId', 'catNb'],
             fallback: '${sections.length}',
           ),
-          title: JsonUtils.string(
-            map,
-            ['lang_ar_title', 'ar_title', 'title', 'name'],
-            fallback: 'مختارات',
-          ),
+          title: sectionTitle,
           items: _unique(media),
         ),
       );
@@ -264,6 +269,99 @@ class CinemanaApi {
     }
 
     return sections;
+  }
+
+
+  Future<MediaItem> _repairHomeCardTitleFromDetails(
+    MediaItem item,
+    Map<String, dynamic> raw,
+    String sectionTitle,
+  ) async {
+    String normalized(String value) => value
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), ' ');
+
+    bool isBad(String value) {
+      final v = normalized(value);
+      final section = normalized(sectionTitle);
+      return v.isEmpty || v == 'بدون عنوان' || (section.isNotEmpty && v == section);
+    }
+
+    if (!isBad(item.title)) return item;
+
+    // First try title-like fields that belong to the content object itself.
+    final direct = JsonUtils.string(raw, const [
+      'videoTitle', 'video_title',
+      'videoArTitle', 'video_ar_title',
+      'movieTitle', 'movie_title',
+      'seriesTitle', 'series_title',
+      'custom_ar_title', 'ar_title', 'arTitle',
+      'display_name', 'displayName',
+      'name', 'title',
+      'en_title', 'enTitle', 'videoEnTitle', 'lang_en_title',
+    ]).trim();
+    if (!isBad(direct)) return item.copyWith(title: direct);
+
+    // Some videoGroups payloads wrap the actual media one level deeper.
+    for (final key in const ['videoInfo', 'video', 'media', 'item']) {
+      final nested = raw[key];
+      if (nested is! Map) continue;
+      final nestedMap = Map<String, dynamic>.from(nested);
+      final nestedTitle = JsonUtils.string(nestedMap, const [
+        'videoTitle', 'video_title',
+        'videoArTitle', 'video_ar_title',
+        'movieTitle', 'movie_title',
+        'seriesTitle', 'series_title',
+        'custom_ar_title', 'ar_title', 'arTitle',
+        'display_name', 'displayName',
+        'name', 'title',
+        'en_title', 'enTitle',
+      ]).trim();
+      if (!isBad(nestedTitle)) return item.copyWith(title: nestedTitle);
+    }
+
+    // The authoritative fallback: use the exact title from the content details
+    // page (/videoInfo/{id}) rather than the row/group title. Cache it so the
+    // home screen does not repeatedly request the same title.
+    final cached = _homeCardTitleCache[item.id];
+    if (cached != null && !isBad(cached)) {
+      return item.copyWith(title: cached);
+    }
+
+    try {
+      final detail = await details(item.id);
+      final actual = detail.media.title.trim();
+      if (!isBad(actual)) {
+        _homeCardTitleCache[item.id] = actual;
+        return item.copyWith(title: actual);
+      }
+
+      // Last check against the raw details payload exposed by MediaItem.
+      final rawActual = JsonUtils.string(detail.media.raw, const [
+        'videoTitle', 'video_title',
+        'videoArTitle', 'video_ar_title',
+        'movieTitle', 'movie_title',
+        'seriesTitle', 'series_title',
+        'custom_ar_title', 'ar_title', 'arTitle',
+        'display_name', 'displayName',
+        'name', 'title',
+        'en_title', 'enTitle',
+      ]).trim();
+      if (!isBad(rawActual)) {
+        _homeCardTitleCache[item.id] = rawActual;
+        return item.copyWith(title: rawActual);
+      }
+    } catch (_) {
+      // Keep the card available; a later refresh can resolve the title.
+    }
+
+    // Never show the section name as a movie/series title. Keep the original
+    // non-section title if there is one; otherwise leave a neutral empty title.
+    if (item.title.trim().isNotEmpty && normalized(item.title) != normalized(sectionTitle)) {
+      return item;
+    }
+    return item.copyWith(title: '');
   }
 
   Future<List<MediaItem>> videoGroups({bool refresh = false}) async {

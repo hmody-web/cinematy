@@ -33,7 +33,40 @@ class ContentSourcesScreen extends ConsumerWidget {
               style: TextStyle(height: 1.55, fontWeight: FontWeight.w700),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'المصادر من لوحة التحكم',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.58),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: settings.refreshingRemoteSources
+                    ? null
+                    : () async {
+                        await ref.read(appSettingsProvider).refreshRemoteSources();
+                        ref.invalidate(apiProvider);
+                        ref.invalidate(homeFeedProvider);
+                        ref.invalidate(categoriesProvider);
+                      },
+                icon: settings.refreshingRemoteSources
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('تحديث'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           ...settings.contentSources.map(
             (source) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -96,9 +129,11 @@ class _SourceTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      source.id == 'cinemana'
-                          ? 'المصدر الرئيسي لتطبيق سينماتي'
-                          : 'مكتبة أكوام للأفلام والمسلسلات',
+                      source.description.trim().isNotEmpty
+                          ? source.description
+                          : (source.id == 'cinemana'
+                              ? 'المصدر الرئيسي لتطبيق سينماتي'
+                              : 'مصدر محتوى سينماتي'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white54, fontSize: 12),
@@ -143,13 +178,24 @@ class _SourceLogo extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
       ),
       clipBehavior: Clip.antiAlias,
-      child: Image.asset(
-        source.id == 'akwam'
-            ? 'assets/branding/akwam_logo.webp'
-            : 'assets/branding/app_icon.jpg',
-        fit: BoxFit.cover,
-        filterQuality: FilterQuality.medium,
-      ),
+      child: source.iconUrl.trim().isNotEmpty
+          ? Image.network(
+              source.iconUrl,
+              fit: BoxFit.cover,
+              filterQuality: FilterQuality.medium,
+              errorBuilder: (_, __, ___) => _builtInSourceLogo(source),
+            )
+          : _builtInSourceLogo(source),
     );
   }
+}
+
+Widget _builtInSourceLogo(ContentSourceDefinition source) {
+  return Image.asset(
+    source.id == 'akwam'
+        ? 'assets/branding/akwam_logo.webp'
+        : 'assets/branding/app_icon.jpg',
+    fit: BoxFit.cover,
+    filterQuality: FilterQuality.medium,
+  );
 }

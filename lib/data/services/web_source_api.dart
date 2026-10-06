@@ -33,6 +33,7 @@ class WebSourceApi {
   final ContentSourceDefinition source;
   final Dio _dio;
   final Map<String, _AkwamCacheEntry> _akwamListCache = <String, _AkwamCacheEntry>{};
+  Map<String, dynamic>? _jsonProviderDescriptor;
 
   static const _tmdbKey = '8476a7ab80ad76f0936744df0430e67c';
 
@@ -555,6 +556,186 @@ class WebSourceApi {
     return _parseCards(page.body, page.url);
   }
 
+  Future<Map<String, dynamic>> _providerDescriptor() async {
+    if (_jsonProviderDescriptor != null) return _jsonProviderDescriptor!;
+    final rawUrl = source.baseUrl.trim();
+    if (rawUrl.isEmpty || !rawUrl.toLowerCase().endsWith('.json')) {
+      _jsonProviderDescriptor = <String, dynamic>{};
+      return _jsonProviderDescriptor!;
+    }
+    try {
+      final decoded = jsonDecode((await _getPage(rawUrl)).body);
+      if (decoded is Map) {
+        _jsonProviderDescriptor = Map<String, dynamic>.from(decoded);
+        return _jsonProviderDescriptor!;
+      }
+    } catch (_) {}
+    _jsonProviderDescriptor = <String, dynamic>{};
+    return _jsonProviderDescriptor!;
+  }
+
+  String _expandTemplate(String template, Map<String, String> values) {
+    var result = template;
+    values.forEach((key, value) {
+      result = result.replaceAll('{$key}', Uri.encodeQueryComponent(value));
+    });
+    return result;
+  }
+
+  Future<String> _alooyEndpoint(
+    String name, {
+    Map<String, String> values = const <String, String>{},
+  }) async {
+    final descriptor = await _providerDescriptor();
+    final endpoints = descriptor['endpoints'];
+    if (endpoints is Map) {
+      final raw = endpoints[name]?.toString().trim() ?? '';
+      if (raw.isNotEmpty) return _expandTemplate(raw, values);
+    }
+    const root = 'https://scrptaty.com/pannel/cinematy_data/providers/alooytv.php';
+    switch (name) {
+      case 'search':
+        return '$root?action=search&q=${Uri.encodeQueryComponent(values['query'] ?? '')}';
+      case 'details':
+        return '$root?action=details&id=${Uri.encodeQueryComponent(values['id'] ?? '')}';
+      default:
+        return '$root?action=home';
+    }
+  }
+
+  MediaItem _alooyCard(Map<String, dynamic> map) {
+    final id = (map['id'] ?? '').toString().trim();
+    final title = (map['title'] ?? '').toString().trim();
+    final image = (map['image'] ?? '').toString().trim();
+    final count = int.tryParse((map['episodes_count'] ?? '0').toString()) ?? 0;
+    final kind = (map['kind'] ?? '').toString().toLowerCase();
+    final stableId = 'alooytv:$id:${Uri.encodeComponent(title)}';
+    return MediaItem(
+      id: stableId,
+      title: title,
+      posterUrl: image,
+      backdropUrl: image,
+      isSeries: kind.contains('series') || count > 1,
+      raw: <String, dynamic>{
+        ...map,
+        '_source': 'alooytv',
+        '_sourceUrl': id,
+        '_alooySeriesId': id,
+      },
+    );
+  }
+
+  Future<List<MediaItem>> _alooyList(String url) async {
+    final decoded = jsonDecode((await _getPage(url)).body);
+    final rows = decoded is Map ? decoded['items'] : null;
+    if (rows is! List) return const <MediaItem>[];
+    return rows
+        .whereType<Map>()
+        .map((row) => _alooyCard(Map<String, dynamic>.from(row)))
+        .where((item) => item.id.isNotEmpty && item.title.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Future<List<MediaItem>> alooyHome() async {
+    return _alooyList(await _alooyEndpoint('home'));
+  }
+
+  Future<List<MediaItem>> _alooySearch(String query) async {
+    return _alooyList(await _alooyEndpoint(
+      'search',
+      values: <String, String>{'query': query},
+    ));
+  }
+
+  String _alooyNumericId(String value) {
+    final raw = value.trim();
+    if (raw.startsWith('alooytv:')) {
+      final parts = raw.split(':');
+      if (parts.length >= 2 && RegExp(r'^\d+$').hasMatch(parts[1])) {
+        return parts[1];
+      }
+    }
+    return raw;
+  }
+
+  Future<ContentDetails> _alooyDetails(String id) async {
+    final seriesId = _alooyNumericId(id);
+    final decoded = jsonDecode((await _getPage(await _alooyEndpoint(
+      'details',
+      values: <String, String>{'id': seriesId},
+    )))
+        .body);
+    if (decoded is! Map) throw StateError('AlooYTV details response is invalid');
+    final map = Map<String, dynamic>.from(decoded);
+    final image = (map['image'] ?? '').toString().trim();
+    final episodeRows = map['episodes'] is List
+        ? List<dynamic>.from(map['episodes'] as List)
+        : const <dynamic>[];
+    final episodeCount = int.tryParse((map['episodes_count'] ?? episodeRows.length).toString()) ?? episodeRows.length;
+    final genres = map['genres'] is List
+        ? (map['genres'] as List).map((e) => e.toString()).toList(growable: false)
+        : const <String>[];
+    final raw = <String, dynamic>{
+      ...map,
+      '_source': 'alooytv',
+      '_sourceUrl': seriesId,
+      '_alooySeriesId': seriesId,
+      '_alooyEpisodes': episodeRows,
+      '_alooyStreamUrl': (map['stream_url'] ?? '').toString(),
+      'genres': genres,
+    };
+    return ContentDetails(
+      media: MediaItem(
+        id: seriesId,
+        title: (map['title'] ?? '').toString(),
+        description: (map['description'] ?? '').toString(),
+        posterUrl: image,
+        backdropUrl: image,
+        year: int.tryParse(((map['release'] ?? '').toString().split('-').first)) ?? 0,
+        rating: double.tryParse((map['rating'] ?? '0').toString()) ?? 0,
+        isSeries: map['is_series'] == true || episodeCount > 1,
+        raw: raw,
+      ),
+    );
+  }
+
+  List<SeasonGroup> alooySeasonGroupsFor(MediaItem media, dynamic embedded) =>
+      _alooySeasonGroups(media, embedded);
+
+  List<SeasonGroup> _alooySeasonGroups(
+    MediaItem media,
+    dynamic embedded,
+  ) {
+    if (embedded is! List || embedded.isEmpty) return const <SeasonGroup>[];
+    final episodes = <Episode>[];
+    for (final row in embedded.whereType<Map>()) {
+      final map = Map<String, dynamic>.from(row);
+      final number = int.tryParse((map['episode'] ?? '0').toString()) ?? 0;
+      final stream = (map['stream_url'] ?? map['url'] ?? '').toString().trim();
+      if (number <= 0 || stream.isEmpty) continue;
+      episodes.add(Episode(
+        id: stream,
+        title: (map['title'] ?? 'الحلقة $number').toString(),
+        seasonNumber: 1,
+        episodeNumber: number,
+        posterUrl: (map['image'] ?? media.posterUrl).toString(),
+        description: '',
+        raw: <String, dynamic>{
+          ...map,
+          '_source': 'alooytv',
+          '_sourceUrl': stream,
+          '_streamUrl': stream,
+          '_seriesId': media.id,
+          '_seriesTitle': media.title,
+          '_seriesPoster': media.posterUrl,
+          '_seriesBackdrop': media.backdropUrl,
+        },
+      ));
+    }
+    episodes.sort((a, b) => a.episodeNumber.compareTo(b.episodeNumber));
+    return episodes.isEmpty ? const <SeasonGroup>[] : <SeasonGroup>[SeasonGroup(1, episodes)];
+  }
+
   Future<List<MediaItem>> _tmdbList(String url) async {
     final raw = jsonDecode((await _getPage(url)).body);
     final rows = raw is Map ? raw['results'] : null;
@@ -599,6 +780,7 @@ class WebSourceApi {
   }
 
   Future<List<MediaItem>> search(String query, {int page = 1}) async {
+    if (source.id == 'alooytv') return _alooySearch(query);
     final q = Uri.encodeQueryComponent(query);
     if (source.id == 'cinejoy') {
       return _tmdbList(
@@ -743,6 +925,7 @@ class WebSourceApi {
   }
 
   Future<ContentDetails> details(String id) async {
+    if (source.id == 'alooytv') return _alooyDetails(id);
     if (source.id == 'akwam') {
       return _akwamDetails(id);
     }
@@ -1158,6 +1341,10 @@ class WebSourceApi {
     String htmlBody = '',
     String pageUrlOverride = '',
   }) async {
+    if (source.id == 'alooytv') {
+      final details = await _alooyDetails(id);
+      return _alooySeasonGroups(details.media, details.media.raw['_alooyEpisodes']);
+    }
     if (source.id == 'cinejoy' && id.startsWith('tmdb:tv:')) {
       final tmdbId = id.split(':')[2];
       final detail = jsonDecode((await _getPage(
@@ -1552,6 +1739,31 @@ class WebSourceApi {
       return const [];
     }
 
+    if (source.id == 'alooytv') {
+      final direct = id.trim();
+      final lower = direct.toLowerCase();
+      if (direct.startsWith('http') && (lower.contains('.mp4') || lower.contains('.m3u8'))) {
+        return <VideoSource>[
+          VideoSource(
+            url: direct,
+            quality: lower.contains('.m3u8') ? 'HLS' : 'MP4',
+          ),
+        ];
+      }
+      try {
+        final details = await _alooyDetails(direct);
+        final stream = (details.media.raw['_alooyStreamUrl'] ?? '').toString().trim();
+        if (stream.isNotEmpty) {
+          return <VideoSource>[VideoSource(url: stream, quality: 'MP4')];
+        }
+        final groups = _alooySeasonGroups(details.media, details.media.raw['_alooyEpisodes']);
+        if (groups.length == 1 && groups.first.episodes.length == 1) {
+          return <VideoSource>[VideoSource(url: groups.first.episodes.first.id, quality: 'MP4')];
+        }
+      } catch (_) {}
+      return const <VideoSource>[];
+    }
+
     if (source.id == 'akwam') {
       return _akwamVideoSources(id);
     }
@@ -1600,6 +1812,9 @@ class WebSourceApi {
   }
 
   Future<List<MediaCategory>> categories() async {
+    if (source.id == 'alooytv') {
+      return const <MediaCategory>[MediaCategory(id: 'all', title: 'الكل')];
+    }
     if (source.id == 'akwam') {
       return const <MediaCategory>[
         MediaCategory(id: 'movies', title: 'أفلام'),
@@ -1610,6 +1825,7 @@ class WebSourceApi {
   }
 
   Future<List<MediaItem>> categoryVideos(String id, {int page = 1}) async {
+    if (source.id == 'alooytv') return alooyHome();
     if (source.id == 'akwam') {
       if (id == 'movies') return _akwamList('movies', page: page);
       if (id == 'series') return _akwamList('series', page: page);

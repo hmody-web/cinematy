@@ -33,6 +33,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
     this.brandOpacity = 1,
     this.onBrandLongPress,
     this.activeSourceId = 'cinemana',
+    this.activeSourceIconUrl = '',
+    this.activeSourceName = '',
   });
 
   final String? section;
@@ -45,6 +47,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
   final double brandOpacity;
   final VoidCallback? onBrandLongPress;
   final String activeSourceId;
+  final String activeSourceIconUrl;
+  final String activeSourceName;
 
   @override
   Size get preferredSize => Size.fromHeight(kIsWeb ? 92 : 74);
@@ -80,6 +84,8 @@ class CinematyTopBar extends StatelessWidget implements PreferredSizeWidget {
           brandOpacity: brandOpacity,
           onBrandLongPress: onBrandLongPress,
           activeSourceId: activeSourceId,
+          activeSourceIconUrl: activeSourceIconUrl,
+          activeSourceName: activeSourceName,
         ),
       );
 }
@@ -97,6 +103,8 @@ class CinematyTopBarContent extends StatelessWidget {
     this.brandOpacity = 1,
     this.onBrandLongPress,
     this.activeSourceId = 'cinemana',
+    this.activeSourceIconUrl = '',
+    this.activeSourceName = '',
   });
 
   final String? section;
@@ -109,6 +117,8 @@ class CinematyTopBarContent extends StatelessWidget {
   final double brandOpacity;
   final VoidCallback? onBrandLongPress;
   final String activeSourceId;
+  final String activeSourceIconUrl;
+  final String activeSourceName;
 
   @override
   Widget build(BuildContext context) {
@@ -147,9 +157,14 @@ class CinematyTopBarContent extends StatelessWidget {
                       progress: brandGlassProgress.clamp(0.0, 1.0),
                       child: BrandLogo(
                         size: kIsWeb ? 48 : 38,
-                        logoBadge: activeSourceId == 'akwam'
-                            ? _AkwamSourceBadge(size: kIsWeb ? 20 : 17)
-                            : null,
+                        logoBadge: activeSourceId == 'cinemana'
+                            ? null
+                            : _SourceBadge(
+                                size: kIsWeb ? 20 : 17,
+                                sourceId: activeSourceId,
+                                iconUrl: activeSourceIconUrl,
+                                sourceName: activeSourceName,
+                              ),
                       ),
                     ),
                   ),
@@ -192,12 +207,46 @@ class CinematyTopBarContent extends StatelessWidget {
 }
 
 
-class _AkwamSourceBadge extends StatelessWidget {
-  const _AkwamSourceBadge({required this.size});
+class _SourceBadge extends StatelessWidget {
+  const _SourceBadge({
+    required this.size,
+    required this.sourceId,
+    required this.iconUrl,
+    required this.sourceName,
+  });
+
   final double size;
+  final String sourceId;
+  final String iconUrl;
+  final String sourceName;
 
   @override
   Widget build(BuildContext context) {
+    Widget fallback() {
+      if (sourceId == 'akwam') {
+        return Image.asset(
+          'assets/branding/akwam_logo.webp',
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.medium,
+        );
+      }
+      final letter = sourceName.trim().isEmpty ? 'م' : sourceName.trim().substring(0, 1);
+      return ColoredBox(
+        color: const Color(0xFF241719),
+        child: Center(
+          child: Text(
+            letter,
+            style: TextStyle(
+              fontSize: size * .48,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+              height: 1,
+            ),
+          ),
+        ),
+      );
+    }
+
     return Container(
       width: size,
       height: size,
@@ -216,11 +265,14 @@ class _AkwamSourceBadge extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(size * .25),
-        child: Image.asset(
-          'assets/branding/akwam_logo.webp',
-          fit: BoxFit.cover,
-          filterQuality: FilterQuality.medium,
-        ),
+        child: iconUrl.trim().isNotEmpty
+            ? Image.network(
+                iconUrl,
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.medium,
+                errorBuilder: (_, __, ___) => fallback(),
+              )
+            : fallback(),
       ),
     );
   }

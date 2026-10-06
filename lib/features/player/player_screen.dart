@@ -16,10 +16,12 @@ import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/download_item.dart';
+import '../../data/models/content_source.dart';
 import '../../data/models/episode.dart';
 import '../../data/models/media_item.dart';
 import '../../data/models/video_source.dart';
 import '../../data/services/cinemana_api.dart';
+import '../../data/services/source_aware_api.dart';
 import '../../data/stores/library_store.dart';
 import '../../providers.dart';
 import '../../widgets/app_notice.dart';
@@ -194,7 +196,38 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _api = ref.read(apiProvider);
+    final sourceId = (widget.media.raw['_source'] ?? '').toString().trim();
+    if (sourceId.isNotEmpty && sourceId != 'cinemana') {
+      final settings = ref.read(appSettingsProvider);
+      ContentSourceDefinition? mediaSource;
+      for (final candidate in settings.contentSources) {
+        if (candidate.id == sourceId) {
+          mediaSource = candidate;
+          break;
+        }
+      }
+      if (mediaSource == null) {
+        for (final candidate in builtInContentSources) {
+          if (candidate.id == sourceId) {
+            mediaSource = candidate;
+            break;
+          }
+        }
+      }
+      if (mediaSource == null && sourceId == 'alooytv') {
+        mediaSource = const ContentSourceDefinition(
+          id: 'alooytv',
+          name: 'AlooYTV',
+          baseUrl: 'https://scrptaty.com/pannel/cinematy_data/providers/alooytv.json',
+          kind: ContentSourceKind.jsonApi,
+        );
+      }
+      _api = mediaSource == null
+          ? ref.read(apiProvider)
+          : SourceAwareApi(source: mediaSource);
+    } else {
+      _api = ref.read(apiProvider);
+    }
     _libraryStore = ref.read(libraryProvider);
     _watchPartyService = WatchPartyService.instance;
     _player = Player(

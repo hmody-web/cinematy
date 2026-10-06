@@ -23,6 +23,7 @@ class SourceAwareApi extends CinemanaApi {
   }
 
   Future<List<MediaItem>> _home() async {
+    if (source.id == 'alooytv') return _web.alooyHome();
     if (source.kind == ContentSourceKind.jsonApi && source.id != 'cinejoy') {
       try { return await _web.parseJsonEndpoint(source.baseUrl); } catch (_) {}
     }
@@ -32,7 +33,9 @@ class SourceAwareApi extends CinemanaApi {
   @override
   Future<List<MediaItem>> newlyAdded({bool refresh = false}) async {
     if (_isCinemana) return super.newlyAdded(refresh: refresh);
-    return _home();
+    final items = await _home();
+    if (source.id == 'alooytv') return items.take(40).toList(growable: false);
+    return items;
   }
 
   @override
@@ -52,7 +55,10 @@ class SourceAwareApi extends CinemanaApi {
     }
     final items = await _home();
     if (items.isEmpty) return const [];
-    return [MediaSection(id: 'latest', title: 'أحدث الإضافات', items: items)];
+    final sectionItems = source.id == 'alooytv'
+        ? items.take(80).toList(growable: false)
+        : items;
+    return [MediaSection(id: 'latest', title: 'أحدث الإضافات', items: sectionItems)];
   }
 
   @override
@@ -134,6 +140,14 @@ class SourceAwareApi extends CinemanaApi {
   @override
   Future<List<SeasonGroup>> seasonsFor(MediaItem media, {Map<String, dynamic> detailsRaw = const {}}) async {
     if (_isCinemana) return super.seasonsFor(media, detailsRaw: detailsRaw);
+
+    if (source.id == 'alooytv') {
+      final embedded = detailsRaw['_alooyEpisodes'] ?? media.raw['_alooyEpisodes'];
+      if (embedded is List && embedded.isNotEmpty) {
+        return _web.alooySeasonGroupsFor(media, embedded);
+      }
+      return _web.seasons(media.id);
+    }
 
     if (source.id == 'akwam') {
       final embedded = detailsRaw['_akwamEpisodes'] ?? media.raw['_akwamEpisodes'];

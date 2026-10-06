@@ -9,6 +9,7 @@ import 'package:cinematy/core/navigation/cinematy_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/display_text.dart';
 import '../../data/models/download_item.dart';
+import '../../data/models/content_source.dart';
 import '../../data/models/media_item.dart';
 import '../../data/models/network_access_state.dart';
 import '../../providers.dart';
@@ -85,6 +86,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget build(BuildContext context) {
     final feed = ref.watch(homeFeedProvider);
     final settings = ref.watch(appSettingsProvider);
+    final activeSource = settings.activeContentSource;
     final access = ref.watch(networkAccessProvider);
     final library = ref.watch(libraryProvider);
     final downloads = ref.watch(downloadProvider);
@@ -139,6 +141,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               downloads.items.length + downloads.activeItems.length,
               onBrandLongPress: _showSourcePicker,
               activeSourceId: settings.activeContentSourceId,
+              activeSourceIconUrl: activeSource.iconUrl,
+              activeSourceName: activeSource.name,
               onContinue: () => Navigator.push(
                 context,
                 CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
@@ -151,7 +155,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             SliverFillRemaining(
               hasScrollBody: false,
               child: EmptyState(
-                title: 'تعذر تحميل مكتبة ${settings.activeContentSourceId == 'akwam' ? 'أكوام' : 'سينمانا'}',
+                title: 'تعذر تحميل مكتبة ${activeSource.id == 'cinemana' ? 'سينمانا' : activeSource.name}',
                 message:
                     'تحقق من الاتصال ثم اسحب للأسفل للمحاولة مجدداً.',
                 onRetry: () => _refresh(ref),
@@ -172,6 +176,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   downloads.items.length + downloads.activeItems.length,
                   onBrandLongPress: _showSourcePicker,
                   activeSourceId: settings.activeContentSourceId,
+              activeSourceIconUrl: activeSource.iconUrl,
+              activeSourceName: activeSource.name,
                   onContinue: () => Navigator.push(
                     context,
                     CinematyPageRoute(builder: (_) => const ContinueWatchingScreen()),
@@ -205,6 +211,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 downloads.items.length + downloads.activeItems.length,
                 onBrandLongPress: _showSourcePicker,
                 activeSourceId: settings.activeContentSourceId,
+              activeSourceIconUrl: activeSource.iconUrl,
+              activeSourceName: activeSource.name,
                 brandGlassProgressListenable: _brandGlassProgress,
                 brandOpacityListenable: _brandOpacity,
                 onContinue: () => Navigator.push(
@@ -384,6 +392,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 right: kIsWeb ? 24 : 12,
                 child: _QuickSourcePicker(
                   activeSourceId: settings.activeContentSourceId,
+                  sources: settings.contentSources,
                   onSelect: (id) => Navigator.of(dialogContext).pop(id),
                 ),
               ),
@@ -434,6 +443,8 @@ SliverAppBar _topBarSliver(
   ValueListenable<double>? brandOpacityListenable,
   VoidCallback? onBrandLongPress,
   String activeSourceId = 'cinemana',
+  String activeSourceIconUrl = '',
+  String activeSourceName = '',
 }) =>
     SliverAppBar(
       pinned: false,
@@ -465,6 +476,8 @@ SliverAppBar _topBarSliver(
               brandOpacity: brandOpacity,
               onBrandLongPress: onBrandLongPress,
               activeSourceId: activeSourceId,
+              activeSourceIconUrl: activeSourceIconUrl,
+              activeSourceName: activeSourceName,
             )
           : ValueListenableBuilder<double>(
               valueListenable: brandGlassProgressListenable,
@@ -478,6 +491,8 @@ SliverAppBar _topBarSliver(
                   brandOpacity: opacity,
                   onBrandLongPress: onBrandLongPress,
                   activeSourceId: activeSourceId,
+                  activeSourceIconUrl: activeSourceIconUrl,
+                  activeSourceName: activeSourceName,
                 ),
               ),
             ),
@@ -487,15 +502,18 @@ SliverAppBar _topBarSliver(
 class _QuickSourcePicker extends StatelessWidget {
   const _QuickSourcePicker({
     required this.activeSourceId,
+    required this.sources,
     required this.onSelect,
   });
 
   final String activeSourceId;
+  final List<ContentSourceDefinition> sources;
   final ValueChanged<String> onSelect;
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.sizeOf(context).width;
+    final screenSize = MediaQuery.sizeOf(context);
+    final screenWidth = screenSize.width;
     final preferredWidth = kIsWeb ? 330.0 : 312.0;
     final width = (screenWidth - 24).clamp(260.0, preferredWidth).toDouble();
     return ClipRRect(
@@ -504,6 +522,7 @@ class _QuickSourcePicker extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
         child: Container(
           width: width,
+          constraints: BoxConstraints(maxHeight: screenSize.height * .72),
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 13),
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -524,9 +543,11 @@ class _QuickSourcePicker extends StatelessWidget {
               ),
             ],
           ),
-          child: Directionality(
-            textDirection: TextDirection.rtl,
-            child: Column(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -557,24 +578,17 @@ class _QuickSourcePicker extends StatelessWidget {
                     ],
                   ),
                 ),
-                _QuickSourceOption(
-                  id: 'cinemana',
-                  title: 'سينماتي',
-                  subtitle: 'المصدر الرئيسي • سينمانا',
-                  asset: 'assets/branding/logo.webp',
-                  selected: activeSourceId == 'cinemana',
-                  onTap: onSelect,
-                ),
-                const SizedBox(height: 8),
-                _QuickSourceOption(
-                  id: 'akwam',
-                  title: 'أكوام',
-                  subtitle: 'أفلام ومسلسلات أكوام',
-                  asset: 'assets/branding/akwam_logo.webp',
-                  selected: activeSourceId == 'akwam',
-                  onTap: onSelect,
-                ),
+                ...sources.asMap().entries.expand((entry) sync* {
+                  final source = entry.value;
+                  if (entry.key > 0) yield const SizedBox(height: 8);
+                  yield _QuickSourceOption(
+                    source: source,
+                    selected: activeSourceId == source.id,
+                    onTap: onSelect,
+                  );
+                }),
               ],
+              ),
             ),
           ),
         ),
@@ -585,29 +599,31 @@ class _QuickSourcePicker extends StatelessWidget {
 
 class _QuickSourceOption extends StatelessWidget {
   const _QuickSourceOption({
-    required this.id,
-    required this.title,
-    required this.subtitle,
-    required this.asset,
+    required this.source,
     required this.selected,
     required this.onTap,
   });
 
-  final String id;
-  final String title;
-  final String subtitle;
-  final String asset;
+  final ContentSourceDefinition source;
   final bool selected;
   final ValueChanged<String> onTap;
 
   @override
   Widget build(BuildContext context) {
+    final title = source.id == 'cinemana' ? 'سينماتي' : source.name;
+    final subtitle = source.description.trim().isNotEmpty
+        ? source.description
+        : (source.kind == ContentSourceKind.jsonApi
+            ? 'مصدر JSON / API'
+            : source.kind == ContentSourceKind.website
+                ? 'مصدر موقع'
+                : 'مصدر محتوى سينماتي');
     return Material(
       color: selected ? AppColors.redBright.withOpacity(.12) : Colors.white.withOpacity(.035),
       borderRadius: BorderRadius.circular(19),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => onTap(id),
+        onTap: () => onTap(source.id),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           padding: const EdgeInsets.all(10),
@@ -619,32 +635,24 @@ class _QuickSourceOption extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Container(
-                width: 48,
-                height: 48,
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(.32),
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(color: Colors.white.withOpacity(.08)),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.asset(asset, fit: BoxFit.cover, filterQuality: FilterQuality.medium),
-                ),
-              ),
-              const SizedBox(width: 12),
+              _QuickSourceIcon(source: source),
+              const SizedBox(width: 11),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w900),
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: Colors.white.withOpacity(.43), fontSize: 11.5),
+                      style: TextStyle(color: Colors.white.withOpacity(.44), fontSize: 10.5),
                     ),
                   ],
                 ),
@@ -652,23 +660,62 @@ class _QuickSourceOption extends StatelessWidget {
               const SizedBox(width: 8),
               AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
-                width: 26,
-                height: 26,
+                width: 24,
+                height: 24,
                 decoration: BoxDecoration(
-                  color: selected ? AppColors.redBright : Colors.white.withOpacity(.06),
                   shape: BoxShape.circle,
-                  border: Border.all(color: selected ? AppColors.redBright : Colors.white.withOpacity(.08)),
+                  color: selected ? AppColors.redBright : Colors.white.withOpacity(.07),
+                  border: Border.all(
+                    color: selected ? Colors.white.withOpacity(.18) : Colors.white.withOpacity(.08),
+                  ),
                 ),
-                child: Icon(
-                  selected ? Icons.check_rounded : Icons.chevron_left_rounded,
-                  size: 16,
-                  color: selected ? Colors.white : Colors.white54,
-                ),
+                child: selected
+                    ? const Icon(Icons.check_rounded, size: 15, color: Colors.white)
+                    : null,
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _QuickSourceIcon extends StatelessWidget {
+  const _QuickSourceIcon({required this.source});
+  final ContentSourceDefinition source;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget fallback() {
+      return Image.asset(
+        source.id == 'akwam'
+            ? 'assets/branding/akwam_logo.webp'
+            : source.id == 'cinemana'
+                ? 'assets/branding/logo.webp'
+                : 'assets/branding/app_icon.jpg',
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+      );
+    }
+
+    return Container(
+      width: 45,
+      height: 45,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.055),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(.07)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: source.iconUrl.trim().isNotEmpty
+          ? Image.network(
+              source.iconUrl,
+              fit: BoxFit.cover,
+              filterQuality: FilterQuality.medium,
+              errorBuilder: (_, __, ___) => fallback(),
+            )
+          : fallback(),
     );
   }
 }

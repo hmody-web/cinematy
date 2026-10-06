@@ -69,9 +69,32 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
 
   CinemanaApi _apiForEntryItem() {
     final sourceId = (_entryItem.raw['_source'] ?? '').toString().trim();
-    if (sourceId == 'akwam') {
-      final akwam = builtInContentSources.firstWhere((source) => source.id == 'akwam');
-      return SourceAwareApi(source: akwam);
+    if (sourceId.isNotEmpty && sourceId != 'cinemana') {
+      final settings = ref.read(appSettingsProvider);
+      ContentSourceDefinition? source;
+      for (final candidate in settings.contentSources) {
+        if (candidate.id == sourceId) {
+          source = candidate;
+          break;
+        }
+      }
+      if (source == null) {
+        for (final candidate in builtInContentSources) {
+          if (candidate.id == sourceId) {
+            source = candidate;
+            break;
+          }
+        }
+      }
+      if (source == null && sourceId == 'alooytv') {
+        source = const ContentSourceDefinition(
+          id: 'alooytv',
+          name: 'AlooYTV',
+          baseUrl: 'https://scrptaty.com/pannel/cinematy_data/providers/alooytv.json',
+          kind: ContentSourceKind.jsonApi,
+        );
+      }
+      if (source != null) return SourceAwareApi(source: source);
     }
     return ref.read(apiProvider);
   }
@@ -144,6 +167,31 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
   MediaItem _displayMedia(ContentDetails? details) {
     final fetched = details?.media.id.isNotEmpty == true ? details!.media : _entryItem;
     final sourceId = (_entryItem.raw['_source'] ?? fetched.raw['_source'] ?? '').toString().trim();
+    if (sourceId == 'alooytv') {
+      final poster = _entryItem.posterUrl.isNotEmpty ? _entryItem.posterUrl : fetched.posterUrl;
+      final backdrop = _entryItem.backdropUrl.isNotEmpty ? _entryItem.backdropUrl : poster;
+      return MediaItem(
+        id: _entryItem.id,
+        title: fetched.title.isNotEmpty ? fetched.title : _entryItem.title,
+        description: fetched.description.isNotEmpty ? fetched.description : _entryItem.description,
+        posterUrl: poster,
+        backdropUrl: backdrop,
+        year: fetched.year != 0 ? fetched.year : _entryItem.year,
+        rating: fetched.rating != 0 ? fetched.rating : _entryItem.rating,
+        views: fetched.views != 0 ? fetched.views : _entryItem.views,
+        isSeries: fetched.isSeries || _entryItem.isSeries,
+        season: fetched.season,
+        episode: fetched.episode,
+        raw: <String, dynamic>{
+          ...fetched.raw,
+          ..._entryItem.raw,
+          '_source': 'alooytv',
+          '_sourceUrl': _sourceUrlOf(_entryItem),
+          '_alooyEpisodes': fetched.raw['_alooyEpisodes'] ?? _entryItem.raw['_alooyEpisodes'],
+          '_alooyStreamUrl': fetched.raw['_alooyStreamUrl'] ?? _entryItem.raw['_alooyStreamUrl'],
+        },
+      );
+    }
     if (sourceId != 'akwam') return fetched;
 
     // Akwam may expose a wide og:image/detail artwork which is not the poster
@@ -476,7 +524,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
       return;
     }
     try {
-      final sources = await ref.read(apiProvider).videoSources(media.id);
+      final sources = await _detailsApi.videoSources(media.id);
       if (!mounted) return;
       if (sources.isEmpty) {
         AppNotice.show(context, title: 'لا توجد جودة للتنزيل', message: 'المصدر لم يرجع ملفاً قابلاً للتنزيل لهذا العمل.', type: AppNoticeType.error);
@@ -491,7 +539,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
       AppNotice.show(context, title: 'بدأ التنزيل', message: '${media.title} • ${selected.quality}', type: AppNoticeType.download);
       List<SubtitleSource> subtitles = const <SubtitleSource>[];
       try {
-        subtitles = await ref.read(apiProvider).subtitles(media.id);
+        subtitles = await _detailsApi.subtitles(media.id);
       } catch (_) {}
       await ref.read(downloadProvider).download(
         media,
@@ -532,7 +580,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
   Future<void> _downloadSeason(MediaItem series, List<Episode> episodes) async {
     if (episodes.isEmpty) return;
     try {
-      final firstSources = await ref.read(apiProvider).videoSources(episodes.first.id);
+      final firstSources = await _detailsApi.videoSources(episodes.first.id);
       if (!mounted || firstSources.isEmpty) return;
       final selected = await showModalBottomSheet<VideoSource>(
         context: context,
@@ -546,7 +594,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
         final store = ref.read(downloadProvider);
         if (store.isDownloaded(media.id) || store.isDownloading(media.id)) continue;
         try {
-          final sources = await ref.read(apiProvider).videoSources(ep.id);
+          final sources = await _detailsApi.videoSources(ep.id);
           if (sources.isEmpty) continue;
           var source = sources.first;
           for (final candidate in sources) {
@@ -557,7 +605,7 @@ class _DetailsScreenState extends ConsumerState<DetailsScreen> {
           }
           List<SubtitleSource> subtitles = const <SubtitleSource>[];
           try {
-            subtitles = await ref.read(apiProvider).subtitles(ep.id);
+            subtitles = await _detailsApi.subtitles(ep.id);
           } catch (_) {}
           await store.download(media, source, subtitles: subtitles);
         } catch (_) {}

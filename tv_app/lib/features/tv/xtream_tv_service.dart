@@ -25,11 +25,11 @@ class TvSourceConfig {
         ),
         username: String.fromEnvironment(
           'CINEMATY_TV_USERNAME',
-          defaultValue: '66336441047385',
+          defaultValue: '17860075088178',
         ),
         password: String.fromEnvironment(
           'CINEMATY_TV_PASSWORD',
-          defaultValue: '10832140210652',
+          defaultValue: '96904663972136',
         ),
       );
 }

@@ -6,6 +6,7 @@ import '../../data/stores/app_settings_store.dart';
 import '../../providers.dart';
 import '../../widgets/cinematy_top_bar.dart';
 import 'content_sources_screen.dart';
+import 'tv_server_settings_screen.dart';
 
 class AppSettingsScreen extends ConsumerWidget {
   const AppSettingsScreen({super.key});
@@ -54,6 +55,18 @@ class AppSettingsScreen extends ConsumerWidget {
               leading: const _IconBox(Icons.hub_rounded),
               title: const Text('قسم المصادر', style: TextStyle(fontWeight: FontWeight.w900)),
               subtitle: Text('المصدر الحالي: ${settings.activeContentSource.name}'),
+              trailing: const Icon(Icons.chevron_left_rounded),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _SettingsCard(
+            child: ListTile(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TvServerSettingsScreen()),
+              ),
+              leading: const _IconBox(Icons.live_tv_rounded),
+              title: const Text('سيرفرات التلفاز', style: TextStyle(fontWeight: FontWeight.w900)),
+              subtitle: Text('السيرفر الفعّال: ${settings.activeTvProfile.name}'),
               trailing: const Icon(Icons.chevron_left_rounded),
             ),
           ),

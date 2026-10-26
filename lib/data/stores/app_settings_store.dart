@@ -6,6 +6,21 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/content_source.dart';
+import '../../features/tv/xtream_tv_service.dart';
+
+class TvServerProfile {
+  const TvServerProfile({required this.id, required this.name, required this.server, required this.username, required this.password});
+  final String id;
+  final String name;
+  final String server;
+  final String username;
+  final String password;
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'server': server, 'username': username, 'password': password};
+  factory TvServerProfile.fromJson(Map<String, dynamic> json) => TvServerProfile(
+    id: json['id'] as String? ?? '', name: json['name'] as String? ?? 'سيرفر',
+    server: json['server'] as String? ?? '', username: json['username'] as String? ?? '', password: json['password'] as String? ?? '',
+  );
+}
 
 class AppFontOption {
   const AppFontOption(this.family, this.label);
@@ -23,6 +38,8 @@ class AppSettingsStore extends ChangeNotifier {
   static const _customContentSourcesKey = 'cinematy_custom_content_sources';
   static const _remoteSourcesCacheKey = 'cinematy_remote_content_sources_v1';
   static const _remoteSourcesUpdatedAtKey = 'cinematy_remote_content_sources_updated_at';
+  static const _tvProfilesKey = 'cinematy_tv_server_profiles_v1';
+  static const _activeTvProfileKey = 'cinematy_active_tv_profile_v1';
 
   /// الملف المركزي الذي تعدله لوحة التحكم.
   static const remoteSourcesUrl =
@@ -58,6 +75,16 @@ class AppSettingsStore extends ChangeNotifier {
   String activeContentSourceId = 'cinemana';
   List<ContentSourceDefinition> customContentSources = const [];
   List<ContentSourceDefinition> _remoteContentSources = const [];
+  List<TvServerProfile> tvServerProfiles = const [];
+  String activeTvProfileId = 'original';
+
+  TvServerProfile get activeTvProfile {
+    if (tvServerProfiles.isEmpty) {
+      final source = TvSourceConfig.fromEnvironment();
+      return TvServerProfile(id: 'original', name: 'السيرفر الأصلي', server: source.server, username: source.username, password: source.password);
+    }
+    return tvServerProfiles.firstWhere((e) => e.id == activeTvProfileId, orElse: () => tvServerProfiles.first);
+  }
 
   List<ContentSourceDefinition> get contentSources {
     if (_remoteContentSources.isNotEmpty) {
@@ -82,6 +109,18 @@ class AppSettingsStore extends ChangeNotifier {
     hideTvScoreboard = prefs.getBool(_hideTvScoreboardKey) ?? false;
     openTvOnLaunch = prefs.getBool(_openTvOnLaunchKey) ?? false;
     lowEndLiveOptimization = prefs.getBool(_lowEndLiveOptimizationKey) ?? false;
+
+    final defaultTv = TvSourceConfig.fromEnvironment();
+    final profilesRaw = prefs.getString(_tvProfilesKey);
+    final customTv = profilesRaw == null ? <TvServerProfile>[] : (jsonDecode(profilesRaw) as List).whereType<Map>().map((e) => TvServerProfile.fromJson(Map<String, dynamic>.from(e))).where((e) => e.id.isNotEmpty && e.server.isNotEmpty).toList();
+    tvServerProfiles = <TvServerProfile>[
+      TvServerProfile(id: 'original', name: 'السيرفر الأصلي', server: defaultTv.server, username: defaultTv.username, password: defaultTv.password),
+      ...customTv.where((e) => e.id != 'original'),
+    ];
+    final savedTvId = prefs.getString(_activeTvProfileKey) ?? 'original';
+    activeTvProfileId = tvServerProfiles.any((e) => e.id == savedTvId) ? savedTvId : 'original';
+    final activeTv = activeTvProfile;
+    await XtreamTvService.setActiveConfig(TvSourceConfig(server: activeTv.server, username: activeTv.username, password: activeTv.password));
 
     // المصدر اليدوي القديم يبقى محفوظ للتوافق، لكن القائمة الفعلية تأتي من السيرفر.
     final customRaw = prefs.getString(_customContentSourcesKey);
@@ -264,6 +303,37 @@ class AppSettingsStore extends ChangeNotifier {
       ContentSourceDefinition.encodeList(customContentSources),
     );
     await prefs.setString(_activeContentSourceKey, activeContentSourceId);
+  }
+
+
+  Future<void> addTvServer(TvServerProfile profile) async {
+    tvServerProfiles = [...tvServerProfiles.where((e) => e.id != profile.id), profile];
+    await _saveTvProfiles();
+    notifyListeners();
+  }
+
+  Future<void> removeTvServer(String id) async {
+    if (id == 'original') return;
+    tvServerProfiles = tvServerProfiles.where((e) => e.id != id).toList();
+    if (activeTvProfileId == id) await activateTvServer('original');
+    await _saveTvProfiles();
+    notifyListeners();
+  }
+
+  Future<void> activateTvServer(String id) async {
+    final matches = tvServerProfiles.where((e) => e.id == id);
+    if (matches.isEmpty) return;
+    final selected = matches.first;
+    activeTvProfileId = id;
+    await XtreamTvService.setActiveConfig(TvSourceConfig(server: selected.server, username: selected.username, password: selected.password));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_activeTvProfileKey, id);
+    notifyListeners();
+  }
+
+  Future<void> _saveTvProfiles() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tvProfilesKey, jsonEncode(tvServerProfiles.where((e) => e.id != 'original').map((e) => e.toJson()).toList()));
   }
 
   Future<void> setPreferredVideoQuality(int value) async {

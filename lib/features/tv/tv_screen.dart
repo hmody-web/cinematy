@@ -59,6 +59,7 @@ class _TvScreenState extends ConsumerState<TvScreen>
   bool _heroLoading = true;
   bool _heroAutoForward = true;
   late final AppSettingsStore _settings;
+  late String _lastTvProfileId;
 
   @override
   bool get wantKeepAlive => true;
@@ -67,6 +68,7 @@ class _TvScreenState extends ConsumerState<TvScreen>
   void initState() {
     super.initState();
     _settings = ref.read(appSettingsProvider);
+    _lastTvProfileId = _settings.activeTvProfileId;
     _settings.addListener(_onSettingsChanged);
     tvLivePlaybackActive.addListener(_onPlaybackStateChanged);
     _loadInitial();
@@ -87,6 +89,13 @@ class _TvScreenState extends ConsumerState<TvScreen>
 
   void _onSettingsChanged() {
     if (!mounted) return;
+    if (_lastTvProfileId != _settings.activeTvProfileId) {
+      _lastTvProfileId = _settings.activeTvProfileId;
+      _selectedCategory = null;
+      _channels = const [];
+      _allChannels = const [];
+      unawaited(_loadInitial());
+    }
     if (_settings.hideTvScoreboard) {
       _heroRefreshTimer?.cancel();
       _heroAutoPageTimer?.cancel();

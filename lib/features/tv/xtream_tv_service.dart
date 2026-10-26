@@ -1,4 +1,6 @@
 import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 
 import 'tv_models.dart';
 
@@ -18,6 +20,8 @@ class TvSourceConfig {
       username.trim().isNotEmpty &&
       password.trim().isNotEmpty;
 
+  static TvSourceConfig active = TvSourceConfig.fromEnvironment();
+
   factory TvSourceConfig.fromEnvironment() => const TvSourceConfig(
         server: String.fromEnvironment(
           'CINEMATY_TV_SERVER',
@@ -25,18 +29,18 @@ class TvSourceConfig {
         ),
         username: String.fromEnvironment(
           'CINEMATY_TV_USERNAME',
-          defaultValue: '66336441047385',
+          defaultValue: '17860075088178',
         ),
         password: String.fromEnvironment(
           'CINEMATY_TV_PASSWORD',
-          defaultValue: '10832140210652',
+          defaultValue: '96904663972136',
         ),
       );
 }
 
 class XtreamTvService {
   XtreamTvService({TvSourceConfig? config, Dio? dio})
-      : config = config ?? TvSourceConfig.fromEnvironment(),
+      : config = config ?? TvSourceConfig.active,
         _dio = dio ??
             Dio(
               BaseOptions(
@@ -51,7 +55,32 @@ class XtreamTvService {
               ),
             );
 
-  final TvSourceConfig config;
+  TvSourceConfig config;
+  static const _activeServerKey = 'cinematy_active_tv_server_config';
+
+  static Future<void> restoreActiveConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_activeServerKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final map = Map<String, dynamic>.from(
+        (jsonDecode(raw) as Map).cast<String, dynamic>(),
+      );
+      TvSourceConfig.active = TvSourceConfig(
+        server: map['server'] as String? ?? TvSourceConfig.fromEnvironment().server,
+        username: map['username'] as String? ?? '',
+        password: map['password'] as String? ?? '',
+      );
+    } catch (_) {}
+  }
+
+  static Future<void> setActiveConfig(TvSourceConfig value) async {
+    TvSourceConfig.active = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_activeServerKey, jsonEncode({
+      'server': value.server, 'username': value.username, 'password': value.password,
+    }));
+  }
   final Dio _dio;
 
   String get _endpoint => '${config.server.replaceAll(RegExp(r'/+$'), '')}/player_api.php';
@@ -64,6 +93,7 @@ class XtreamTvService {
       };
 
   Future<List<TvCategory>> getCategories() async {
+    await _syncConfig();
     _ensureConfigured();
     final response = await _dio.get<dynamic>(
       _endpoint,
@@ -78,6 +108,7 @@ class XtreamTvService {
   }
 
   Future<List<TvChannel>> getChannels({String? categoryId}) async {
+    await _syncConfig();
     _ensureConfigured();
     final response = await _dio.get<dynamic>(
       _endpoint,
@@ -98,6 +129,7 @@ class XtreamTvService {
 
   /// مكتبة المسلسلات من نفس Xtream المصدر المستخدم لقنوات التلفاز.
   Future<List<Map<String, dynamic>>> getSeriesCatalog() async {
+    await _syncConfig();
     _ensureConfigured();
     final response = await _dio.get<dynamic>(
       _endpoint,
@@ -111,6 +143,7 @@ class XtreamTvService {
 
   /// تفاصيل مسلسل Xtream، وتشمل عادةً info + seasons + episodes.
   Future<Map<String, dynamic>> getSeriesInfo(String seriesId) async {
+    await _syncConfig();
     _ensureConfigured();
     final response = await _dio.get<dynamic>(
       _endpoint,
@@ -144,6 +177,11 @@ class XtreamTvService {
     if (data is List) return data;
     if (data is Map && data['data'] is List) return data['data'] as List;
     return const [];
+  }
+
+  Future<void> _syncConfig() async {
+    await restoreActiveConfig();
+    config = TvSourceConfig.active;
   }
 
   void _ensureConfigured() {
